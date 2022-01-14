@@ -16,6 +16,7 @@ package builder
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strings"
 
@@ -186,6 +187,17 @@ func (r *ReleaseBuilder) collectGithubArtifacts(ver string) error {
 		return fmt.Errorf("Failed to create dir: %s", err)
 	}
 
+	// We attach calicoctl binaries directly to the release as well.
+	files, err := ioutil.ReadDir("calicoctl/bin/")
+	if err != nil {
+		return err
+	}
+	for _, b := range files {
+		if _, err := r.runner.Run("cp", []string{fmt.Sprintf("calicoctl/bin/%s", b.Name()), uploadDir}, nil); err != nil {
+			return err
+		}
+	}
+
 	// Build and add in the complete release tarball.
 	if err = r.buildReleaseTar(ver, uploadDir); err != nil {
 		return err
@@ -196,11 +208,6 @@ func (r *ReleaseBuilder) collectGithubArtifacts(ver string) error {
 		return err
 	}
 	if _, err := r.runner.Run("cp", []string{fmt.Sprintf("calico/bin/tigera-operator-%s.tgz", ver), uploadDir}, nil); err != nil {
-		return err
-	}
-
-	// We attach calicoctl binaries directly to the release as well.
-	if _, err := r.runner.Run("cp", []string{"calicoctl/bin/*", uploadDir}, nil); err != nil {
 		return err
 	}
 
