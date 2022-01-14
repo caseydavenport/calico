@@ -31,7 +31,7 @@ var (
 	}
 
 	// Architectures to build as part of a release.
-	architectures = []string{"amd64", "armv7", "ppc64le"}
+	architectures = []string{"amd64"}
 
 	// Git configuration for publishing to GitHub.
 	organization = "caseydavenport"
