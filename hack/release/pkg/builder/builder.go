@@ -27,21 +27,16 @@ import (
 var (
 	// Registries to which all release images are pushed.
 	registries = []string{
-		"docker.io/calico",
-		"quay.io/calico",
-		"gcr.io/projectcalico-org",
-		"eu.gcr.io/projectcalico-org",
-		"asia.gcr.io/projectcalico-org",
-		"us.gcr.io/projectcalico-org",
+		"caseydavenport",
 	}
 
 	// Architectures to build as part of a release.
-	architectures = []string{"amd64", "arm64", "armv7", "ppc64le", "s390x"}
+	architectures = []string{"amd64", "armv7", "ppc64le"}
 
 	// Git configuration for publishing to GitHub.
-	organization = "projectcalico"
+	organization = "caseydavenport"
 	repo         = "calico"
-	origin       = "origin"
+	origin       = "cd4"
 )
 
 func NewReleaseBuilder(runner CommandRunner) *ReleaseBuilder {
