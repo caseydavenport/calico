@@ -37,10 +37,10 @@ import (
 	"github.com/projectcalico/calico/libcalico-go/lib/options"
 )
 
-var _ = Describe("kube-controllers health check FV tests", func() {
+var _ = Describe("kube-controllers health check FV tests (etcd mode)", func() {
 	var (
 		etcd              *containers.Container
-		policyController  *containers.Container
+		controller        *containers.Container
 		apiserver         *containers.Container
 		calicoClient      client.Interface
 		k8sClient         *kubernetes.Clientset
@@ -56,7 +56,7 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 		apiserver = testutils.RunK8sApiserver(etcd.IP)
 
 		// Write out a kubeconfig file
-		kconfigfile, err := ioutil.TempFile("", "ginkgo-policycontroller")
+		kconfigfile, err := ioutil.TempFile("", "ginkgo-controller")
 		Expect(err).NotTo(HaveOccurred())
 		defer os.Remove(kconfigfile.Name())
 		data := testutils.BuildKubeconfig(apiserver.IP)
@@ -67,7 +67,7 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 		Expect(kconfigfile.Chmod(os.ModePerm)).NotTo(HaveOccurred())
 
 		// Run the controller.
-		policyController = testutils.RunPolicyController(apiconfig.EtcdV3, etcd.IP, kconfigfile.Name(), "")
+		controller = testutils.RunPolicyController(apiconfig.EtcdV3, etcd.IP, kconfigfile.Name(), "")
 
 		k8sClient, err = testutils.GetK8sClient(kconfigfile.Name())
 		Expect(err).NotTo(HaveOccurred())
@@ -88,7 +88,7 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 
 	AfterEach(func() {
 		controllerManager.Stop()
-		policyController.Stop()
+		controller.Stop()
 		apiserver.Stop()
 		etcd.Stop()
 	})
@@ -109,7 +109,7 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 		It("should pass health check", func() {
 			By("Waiting for an initial readiness report")
 			Eventually(func() []byte {
-				cmd := exec.Command("docker", "exec", policyController.Name, "/usr/bin/check-status", "-r")
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
 				stdoutStderr, _ := cmd.CombinedOutput()
 
 				return stdoutStderr
@@ -117,7 +117,7 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 
 			By("Waiting for the controller to be ready")
 			Eventually(func() string {
-				cmd := exec.Command("docker", "exec", policyController.Name, "/usr/bin/check-status", "-r")
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
 				stdoutStderr, _ := cmd.CombinedOutput()
 
 				return strings.TrimSpace(string(stdoutStderr))
@@ -127,7 +127,7 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 		It("should fail health check if apiserver is not running", func() {
 			By("Waiting for an initial readiness report")
 			Eventually(func() []byte {
-				cmd := exec.Command("docker", "exec", policyController.Name, "/usr/bin/check-status", "-r")
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
 				stdoutStderr, _ := cmd.CombinedOutput()
 
 				return stdoutStderr
@@ -138,7 +138,7 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 
 			By("Waiting for the readiness to change")
 			Eventually(func() []byte {
-				cmd := exec.Command("docker", "exec", policyController.Name, "/usr/bin/check-status", "-r")
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
 				stdoutStderr, _ := cmd.CombinedOutput()
 
 				return stdoutStderr
@@ -148,7 +148,7 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 		It("should fail health check if etcd not running", func() {
 			By("Waiting for an initial readiness report")
 			Eventually(func() []byte {
-				cmd := exec.Command("docker", "exec", policyController.Name, "/usr/bin/check-status", "-r")
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
 				stdoutStderr, _ := cmd.CombinedOutput()
 
 				return stdoutStderr
@@ -159,11 +159,121 @@ var _ = Describe("kube-controllers health check FV tests", func() {
 
 			By("Waiting for the readiness to change")
 			Eventually(func() []byte {
-				cmd := exec.Command("docker", "exec", policyController.Name, "/usr/bin/check-status", "-r")
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
 				stdoutStderr, _ := cmd.CombinedOutput()
 
 				return stdoutStderr
 			}, 20*time.Second, 500*time.Millisecond).Should(ContainSubstring("Error verifying datastore"))
+		})
+	})
+})
+
+var _ = Describe("kube-controllers health check FV tests (kdd mode)", func() {
+	var (
+		etcd              *containers.Container
+		controller        *containers.Container
+		apiserver         *containers.Container
+		calicoClient      client.Interface
+		k8sClient         *kubernetes.Clientset
+		controllerManager *containers.Container
+	)
+
+	BeforeEach(func() {
+		// Run etcd.
+		etcd = testutils.RunEtcd()
+		calicoClient = testutils.GetCalicoClient(apiconfig.Kubernetes, etcd.IP, "")
+
+		// Run apiserver.
+		apiserver = testutils.RunK8sApiserver(etcd.IP)
+
+		// Write out a kubeconfig file
+		kconfigfile, err := ioutil.TempFile("", "ginkgo-policycontroller")
+		Expect(err).NotTo(HaveOccurred())
+		defer os.Remove(kconfigfile.Name())
+		data := testutils.BuildKubeconfig(apiserver.IP)
+		_, err = kconfigfile.Write([]byte(data))
+		Expect(err).NotTo(HaveOccurred())
+
+		// Make the kubeconfig readable by the container.
+		Expect(kconfigfile.Chmod(os.ModePerm)).NotTo(HaveOccurred())
+
+		// Run the controller.
+		controller = testutils.RunPolicyController(apiconfig.EtcdV3, etcd.IP, kconfigfile.Name(), "")
+
+		k8sClient, err = testutils.GetK8sClient(kconfigfile.Name())
+		Expect(err).NotTo(HaveOccurred())
+
+		// Wait for the apiserver to be available.
+		Eventually(func() error {
+			_, err := k8sClient.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
+			return err
+		}, 30*time.Second, 1*time.Second).Should(BeNil())
+
+		// Run controller manager.  Empirically it can take around 10s until the
+		// controller manager is ready to create default service accounts, even
+		// when the k8s image has already been downloaded to run the API
+		// server.  We use Eventually to allow for possible delay when doing
+		// initial pod creation below.
+		controllerManager = testutils.RunK8sControllerManager(apiserver.IP)
+	})
+
+	AfterEach(func() {
+		controllerManager.Stop()
+		controller.Stop()
+		apiserver.Stop()
+		etcd.Stop()
+	})
+
+	It("should initialize the datastore at start-of-day", func() {
+		var info *api.ClusterInformation
+		Eventually(func() *api.ClusterInformation {
+			info, _ = calicoClient.ClusterInformation().Get(context.Background(), "default", options.GetOptions{})
+			return info
+		}, 10*time.Second).ShouldNot(BeNil())
+
+		Expect(info.Spec.ClusterGUID).To(MatchRegexp("^[a-f0-9]{32}$"))
+		Expect(info.Spec.ClusterType).To(Equal("k8s"))
+		Expect(*info.Spec.DatastoreReady).To(BeTrue())
+	})
+
+	Context("Healthcheck FV tests", func() {
+		It("should pass health check", func() {
+			By("Waiting for an initial readiness report")
+			Eventually(func() []byte {
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
+				stdoutStderr, _ := cmd.CombinedOutput()
+
+				return stdoutStderr
+			}, 20*time.Second, 500*time.Millisecond).ShouldNot(ContainSubstring("initialized to false"))
+
+			By("Waiting for the controller to be ready")
+			Eventually(func() string {
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
+				stdoutStderr, _ := cmd.CombinedOutput()
+
+				return strings.TrimSpace(string(stdoutStderr))
+			}, 20*time.Second, 500*time.Millisecond).Should(Equal("Ready"))
+		})
+
+		It("should fail health check if apiserver is not running", func() {
+			By("Waiting for an initial readiness report")
+			Eventually(func() []byte {
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
+				stdoutStderr, _ := cmd.CombinedOutput()
+
+				return stdoutStderr
+			}, 20*time.Second, 500*time.Millisecond).ShouldNot(ContainSubstring("initialized to false"))
+
+			By("Stopping the apiserver")
+			apiserver.Stop()
+
+			By("Waiting for the readiness to change")
+			Eventually(func() string {
+				cmd := exec.Command("docker", "exec", controller.Name, "/usr/bin/check-status", "-r")
+				stdoutStderr, _ := cmd.CombinedOutput()
+
+				return string(stdoutStderr)
+			}, 21*time.Second, 500*time.Millisecond).Should(ContainSubstring("Error reaching apiserver"))
 		})
 	})
 })
