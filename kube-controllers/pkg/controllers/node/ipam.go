@@ -113,7 +113,7 @@ func init() {
 	prometheus.MustRegister(legacyBlocksGauge)
 }
 
-func NewIPAMController(cfg config.NodeControllerConfig, c client.Interface, cs kubernetes.Interface, ni cache.Indexer) *ipamController {
+func NewIPAMController(cfg config.NodeControllerConfig, c client.Interface, cs kubernetes.Interface, ni, pi cache.Indexer) *ipamController {
 	var leakGracePeriod *time.Duration
 	if cfg.LeakGracePeriod != nil {
 		leakGracePeriod = &cfg.LeakGracePeriod.Duration
@@ -127,6 +127,7 @@ func NewIPAMController(cfg config.NodeControllerConfig, c client.Interface, cs k
 		syncChan: make(chan interface{}, 1),
 
 		nodeIndexer: ni,
+		podIndexer:  pi,
 
 		// Buffered channels for potentially bursty channels.
 		syncerUpdates: make(chan interface{}, batchUpdateSize),
@@ -138,12 +139,12 @@ func NewIPAMController(cfg config.NodeControllerConfig, c client.Interface, cs k
 		handleTracker:               newHandleTracker(),
 		kubernetesNodesByCalicoName: make(map[string]string),
 		confirmedLeaks:              make(map[string]*allocation),
-		podCache:                    make(map[string]*v1.Pod),
-		nodesByBlock:                make(map[string]string),
-		blocksByNode:                make(map[string]map[string]bool),
-		emptyBlocks:                 make(map[string]string),
-		poolManager:                 newPoolManager(),
-		datastoreReady:              true,
+		// podCache:                    make(map[string]*v1.Pod),
+		nodesByBlock:   make(map[string]string),
+		blocksByNode:   make(map[string]map[string]bool),
+		emptyBlocks:    make(map[string]string),
+		poolManager:    newPoolManager(),
+		datastoreReady: true,
 
 		// Track blocks which we might want to release.
 		blockReleaseTracker: newBlockReleaseTracker(leakGracePeriod),
@@ -188,7 +189,7 @@ type ipamController struct {
 	blockReleaseTracker *blockReleaseTracker
 
 	// Cache pods to avoid unnecessary API queries.
-	podCache map[string]*v1.Pod
+	// podCache map[string]*v1.Pod
 
 	// Cache datastoreReady to avoid too much API queries.
 	datastoreReady bool
@@ -232,11 +233,13 @@ func (c *ipamController) OnKubernetesNodeDeleted() {
 }
 
 func (c *ipamController) OnKubernetesPodUpdated(key string, p *v1.Pod) {
-	c.podUpdate <- podUpdate{key: key, pod: p}
+	// No-op
+	// c.podUpdate <- podUpdate{key: key, pod: p}
 }
 
 func (c *ipamController) OnKubernetesPodDeleted(key string) {
-	c.podUpdate <- podUpdate{key: key}
+	// No-op
+	// c.podUpdate <- podUpdate{key: key}
 }
 
 // acceptScheduleRequests is the main worker routine of the IPAM controller. It monitors
@@ -254,20 +257,20 @@ func (c *ipamController) acceptScheduleRequests(stopCh <-chan struct{}) {
 	for {
 		// Wait until something wakes us up, or we are stopped
 		select {
-		case pu := <-c.podUpdate:
-			c.handlePodUpdate(pu)
+		// case pu := <-c.podUpdate:
+		// 	c.handlePodUpdate(pu)
 
-			// It's possible we get a rapid series of updates in a row. Use
-			// a consolidation loop to handle "batches" of updates before triggering a sync.
-			var i int
-			for i = 1; i < batchUpdateSize; i++ {
-				select {
-				case pu = <-c.podUpdate:
-					c.handlePodUpdate(pu)
-				default:
-					break
-				}
-			}
+		// 	// It's possible we get a rapid series of updates in a row. Use
+		// 	// a consolidation loop to handle "batches" of updates before triggering a sync.
+		// 	var i int
+		// 	for i = 1; i < batchUpdateSize; i++ {
+		// 		select {
+		// 		case pu = <-c.podUpdate:
+		// 			c.handlePodUpdate(pu)
+		// 		default:
+		// 			break
+		// 		}
+		// 	}
 		case upd := <-c.syncerUpdates:
 			c.handleUpdate(upd)
 
@@ -414,11 +417,11 @@ func (c *ipamController) handleClusterInformationUpdate(kvp model.KVPair) {
 
 // handlePodUpdate wraps up the logic to execute when receiving a pod update.
 func (c *ipamController) handlePodUpdate(pu podUpdate) {
-	if pu.pod != nil {
-		c.podCache[pu.key] = pu.pod
-	} else {
-		delete(c.podCache, pu.key)
-	}
+	// if pu.pod != nil {
+	// 	c.podCache[pu.key] = pu.pod
+	// } else {
+	// 	delete(c.podCache, pu.key)
+	// }
 }
 
 func (c *ipamController) onBlockUpdated(kvp model.KVPair) {
@@ -929,8 +932,8 @@ func (c *ipamController) allocationIsValid(a *allocation, preferCache bool) bool
 			return false
 		}
 
-		// Proactively keep our cache up-to-date.
-		c.podCache[key] = p
+		// // Proactively keep our cache up-to-date.
+		// c.podCache[key] = p
 	}
 
 	// The pod exists - check if it is still on the original node.
