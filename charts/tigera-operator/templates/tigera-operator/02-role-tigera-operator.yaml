@@ -141,6 +141,31 @@ rules:
       - get
       - list
       - watch
+  # The IP pool controller needs permissions to create and list IP pools
+  # using the v1 API to bootstrap the cluster.
+  - apiGroups:
+    - crd.projectcalico.org
+    resources:
+    - ippools
+    verbs:
+    - create
+    - get
+    - list
+    - watch
+  # It must also have permissions for the v3 IP pool resource for
+  # ongoing maintenance of IP pools.
+  - apiGroups:
+    - projectcalico.org
+    resources:
+    - ippools
+    verbs:
+    - create
+    - get
+    - list
+    - watch
+    - delete
+    - update
+    - patch
   - apiGroups:
     - crd.projectcalico.org
     resources:
@@ -154,7 +179,6 @@ rules:
   - apiGroups:
     - crd.projectcalico.org
     resources:
-    - ippools
     - kubecontrollersconfigurations
     - bgpconfigurations
     verbs:

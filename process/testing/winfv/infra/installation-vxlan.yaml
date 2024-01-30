@@ -7,7 +7,6 @@ metadata:
 spec:
   # Configures Calico networking.
   calicoNetwork:
-    # Note: The ipPools section cannot be modified post-install.
     bgp: Disabled
     ipPools:
     - blockSize: 26
