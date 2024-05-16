@@ -31,6 +31,8 @@ func main() {
 	doc := fmt.Sprintf(`Usage:
   <BINARY_NAME> [options] <command> [<args>...]
 
+    install      Install Calico.
+
     create       Create a resource by file, directory or stdin.
     replace      Replace a resource by file, directory or stdin.
     apply        Apply a resource by file, directory or stdin.  This creates a resource
@@ -65,7 +67,7 @@ Description:
 	// Replace all instances of BINARY_NAME with the name of the binary.
 	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", name)
 
-	var parser = &docopt.Parser{
+	parser := &docopt.Parser{
 		HelpHandler:   docopt.PrintHelpOnly,
 		OptionsFirst:  true,
 		SkipHelpFlags: false,
@@ -107,6 +109,8 @@ Description:
 		var err error
 
 		switch command {
+		case "install":
+			err = commands.Install(args)
 		case "create":
 			err = commands.Create(args)
 		case "replace":
