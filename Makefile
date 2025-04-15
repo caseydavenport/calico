@@ -20,20 +20,6 @@ DOCKER_RUN := mkdir -p ./.go-pkg-cache bin $(GOMOD_CACHE) && \
 		-w /go/src/$(PACKAGE_NAME)
 
 clean:
-	$(MAKE) -C api clean
-	$(MAKE) -C apiserver clean
-	$(MAKE) -C app-policy clean
-	$(MAKE) -C calicoctl clean
-	$(MAKE) -C cni-plugin clean
-	$(MAKE) -C confd clean
-	$(MAKE) -C felix clean
-	$(MAKE) -C kube-controllers clean
-	$(MAKE) -C libcalico-go clean
-	$(MAKE) -C node clean
-	$(MAKE) -C pod2daemon clean
-	$(MAKE) -C key-cert-provisioner clean
-	$(MAKE) -C typha clean
-	$(MAKE) -C release clean
 	rm -rf ./bin
 
 ci-preflight-checks:
@@ -63,11 +49,11 @@ yaml-lint:
 	@docker run --rm $$(tty -s && echo "-it" || echo) -v $(PWD):/data cytopia/yamllint:latest .
 
 protobuf:
-	$(MAKE) -C app-policy protobuf
-	$(MAKE) -C cni-plugin protobuf
-	$(MAKE) -C felix protobuf
-	$(MAKE) -C pod2daemon protobuf
-	$(MAKE) -C goldmane protobuf
+	$(MAKE) -C pkg/core/app-policy protobuf
+	$(MAKE) -C pkg/core/cni-plugin protobuf
+	$(MAKE) -C pkg/core/felix protobuf
+	$(MAKE) -C pkg/core/pod2daemon protobuf
+	$(MAKE) -C pkg/core/goldmane protobuf
 
 generate:
 	$(MAKE) gen-semaphore-yaml
@@ -75,8 +61,8 @@ generate:
 	$(MAKE) -C lib gen-files
 	$(MAKE) -C api gen-files
 	$(MAKE) -C libcalico-go gen-files
-	$(MAKE) -C felix gen-files
-	$(MAKE) -C goldmane gen-files
+	$(MAKE) -C pkg/core/felix gen-files
+	$(MAKE) -C pkg/core/goldmane gen-files
 	$(MAKE) gen-manifests
 	$(MAKE) fix-changed
 
@@ -105,18 +91,6 @@ bin/tigera-operator-$(GIT_VERSION).tgz: bin/helm $(shell find ./charts/tigera-op
 	--destination ./bin/ \
 	--version $(GIT_VERSION) \
 	--app-version $(GIT_VERSION)
-
-# Build all Calico images for the current architecture.
-image:
-	$(MAKE) -C pod2daemon image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
-	$(MAKE) -C key-cert-provisioner image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
-	$(MAKE) -C calicoctl image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
-	$(MAKE) -C cni-plugin image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
-	$(MAKE) -C apiserver image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
-	$(MAKE) -C kube-controllers image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
-	$(MAKE) -C app-policy image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
-	$(MAKE) -C typha image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
-	$(MAKE) -C node image IMAGETAG=$(GIT_VERSION) VALIDARCHES=$(ARCH)
 
 ###############################################################################
 # Run local e2e smoke test against the checked-out code
