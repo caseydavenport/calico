@@ -2,7 +2,7 @@
 
 
 # DEFINE SOME CONSTANTS TO USE THROUGHOUT
-PKG_CORE="github.com/projectcalico/calico/pkg/core"
+CORE_PKGS="github.com/projectcalico/calico/internal/core"
 DOCKER_CORE="docker/core"
 
 function announce() {
@@ -38,13 +38,13 @@ function run_sed_map() {
   done
 }
 
-# flatten_pkg_dirs iterates through the new pkg/core package structure and removes the now
+# flatten_pkg_dirs iterates through the new internal/core package structure and removes the now
 # unnecessary pkg/ subdirectories lingering from the old file structure.
 function flatten_pkg_dirs() {
   announce "Removing legacy pkg/ directories"
 
   # Find all matching /pkg/*/pkg directories
-  find "./pkg/core" -type d -path "*/pkg" | while read -r inner_dir; do
+  find "./internal/core" -type d -path "*/pkg" | while read -r inner_dir; do
     # Get the parent component directory, e.g., /pkg/component
     component_dir="$(dirname "$inner_dir")"
 
@@ -72,17 +72,15 @@ function flatten_pkg_dirs() {
   done
 }
 
-# flatten_internal_dirs iterates ./internal/lib/<pkg> and flattens the structure to
-# ./internal/<pkg>
 function move_libcalico() {
   announce "Moving libcalico-go"
 
-  mkdir -p ./internal
+  mkdir -p ./internal/lib
 
-  # Move all directories in libcalico-go/lib to internal/
+  # Move all directories in libcalico-go/lib to internal/lib/
   for dir in ./libcalico-go/lib/*; do
     base=$(basename "$dir")
-    dest="internal/$base"
+    dest="internal/lib/$base"
 
     # Move it to the parent directory
     echo "Moving $dir -> $dest"
@@ -90,13 +88,15 @@ function move_libcalico() {
   done
 
   # Clean up remaining libcalico-go files.
-  git mv libcalico-go/test internal/test
-  git mv libcalico-go/Makefile internal/Makefile # TODO: Remove this.
-  git mv libcalico-go/config internal/customresources
+  git mv libcalico-go/test internal/lib/test
+  git mv libcalico-go/Makefile internal/lib/Makefile # TODO: Remove this.
+  git mv libcalico-go/config internal/lib/customresources
   git mv libcalico-go/docs/* docs/
-  git mv libcalico-go/patches internal/patches # TODO: Consolidate with customresource package.
+  git mv libcalico-go/patches internal/lib/patches # TODO: Consolidate with customresource package.
   rm -rf ./libcalico-go/
 
+  # TODO: Some packages should be public, instead of going into internal/lib
+  # e.g., selectors
 }
 
 set -e
@@ -148,19 +148,19 @@ cmd_files["app-policy/cmd/dikastes/dikastes.go"]="cmd/core/dikastes/main.go"
 # Declare the directories that will be moved into pkg/
 # #################################################
 declare -A pkgs
-pkgs["apiserver"]="pkg/core/apiserver"
-pkgs["app-policy"]="pkg/core/app-policy"
-pkgs["calicoctl"]="pkg/core/calicoctl"
-pkgs["cni-plugin"]="pkg/core/cni-plugin"
-pkgs["felix"]="pkg/core/felix"
-pkgs["goldmane"]="pkg/core/goldmane"
-pkgs["guardian"]="pkg/core/guardian"
-pkgs["key-cert-provisioner"]="pkg/core/key-cert-provisioner"
-pkgs["kube-controllers"]="pkg/core/kube-controllers"
-pkgs["node"]="pkg/core/node"
-pkgs["pod2daemon"]="pkg/core/pod2daemon"
-pkgs["typha"]="pkg/core/typha"
-pkgs["whisker-backend"]="pkg/core/whisker-backend"
+pkgs["apiserver"]="internal/core/apiserver"
+pkgs["app-policy"]="internal/core/app-policy"
+pkgs["calicoctl"]="internal/core/calicoctl"
+pkgs["cni-plugin"]="internal/core/cni-plugin"
+pkgs["felix"]="internal/core/felix"
+pkgs["goldmane"]="internal/core/goldmane"
+pkgs["guardian"]="internal/core/guardian"
+pkgs["key-cert-provisioner"]="internal/core/key-cert-provisioner"
+pkgs["kube-controllers"]="internal/core/kube-controllers"
+pkgs["node"]="internal/core/node"
+pkgs["pod2daemon"]="internal/core/pod2daemon"
+pkgs["typha"]="internal/core/typha"
+pkgs["whisker-backend"]="internal/core/whisker-backend"
 pkgs["third_party"]="pkg/third_party"
 
 # #################################################
@@ -202,20 +202,20 @@ calico/
 declare -A seds
 
 # Core component packages.
-seds["github.com/projectcalico/calico/cni-plugin"]="$PKG_CORE/cni-plugin"
-seds["github.com/projectcalico/calico/felix"]="$PKG_CORE/felix"
-seds["github.com/projectcalico/calico/typha"]="$PKG_CORE/typha"
-seds["github.com/projectcalico/calico/goldmane"]="$PKG_CORE/goldmane"
-seds["github.com/projectcalico/calico/apiserver"]="$PKG_CORE/apiserver"
-seds["github.com/projectcalico/calico/node"]="$PKG_CORE/node"
-seds["github.com/projectcalico/calico/confd"]="$PKG_CORE/node/confd"
-seds["github.com/projectcalico/calico/pod2daemon"]="$PKG_CORE/pod2daemon"
-seds["github.com/projectcalico/calico/whisker-backend"]="$PKG_CORE/whisker-backend"
-seds["github.com/projectcalico/calico/kube-controllers"]="$PKG_CORE/kube-controllers"
-seds["github.com/projectcalico/calico/calicoctl"]="$PKG_CORE/calicoctl"
-seds["github.com/projectcalico/calico/app-policy"]="$PKG_CORE/app-policy"
-seds["github.com/projectcalico/calico/guardian"]="$PKG_CORE/guardian"
-seds["github.com/projectcalico/calico/key-cert-provisioner"]="$PKG_CORE/key-cert-provisioner"
+seds["github.com/projectcalico/calico/cni-plugin"]="$CORE_PKGS/cni-plugin"
+seds["github.com/projectcalico/calico/felix"]="$CORE_PKGS/felix"
+seds["github.com/projectcalico/calico/typha"]="$CORE_PKGS/typha"
+seds["github.com/projectcalico/calico/goldmane"]="$CORE_PKGS/goldmane"
+seds["github.com/projectcalico/calico/apiserver"]="$CORE_PKGS/apiserver"
+seds["github.com/projectcalico/calico/node"]="$CORE_PKGS/node"
+seds["github.com/projectcalico/calico/confd"]="$CORE_PKGS/node/confd"
+seds["github.com/projectcalico/calico/pod2daemon"]="$CORE_PKGS/pod2daemon"
+seds["github.com/projectcalico/calico/whisker-backend"]="$CORE_PKGS/whisker-backend"
+seds["github.com/projectcalico/calico/kube-controllers"]="$CORE_PKGS/kube-controllers"
+seds["github.com/projectcalico/calico/calicoctl"]="$CORE_PKGS/calicoctl"
+seds["github.com/projectcalico/calico/app-policy"]="$CORE_PKGS/app-policy"
+seds["github.com/projectcalico/calico/guardian"]="$CORE_PKGS/guardian"
+seds["github.com/projectcalico/calico/key-cert-provisioner"]="$CORE_PKGS/key-cert-provisioner"
 
 # Library packages.
 seds["github.com/projectcalico/calico/crypto"]="github.com/projectcalico/calico/lib/crypto"
@@ -280,12 +280,12 @@ announce "Moving cmd/ files into cmd/core/"
 move_file_map cmd_files
 cleanup_empty_dirs
 
-# Create pkg/core/ directories.
-announce "Moving pkg/ files into pkg/core"
+# Create internal/core/ directories.
+announce "Moving pkg/ files into internal/core"
 move_file_map pkgs
-git mv confd pkg/core/node/confd/               # Do this after, since it's moving within another directory.
+git mv confd internal/core/node/confd/               # Do this after, since it's moving within another directory.
 
-# Create pkg/core/ directories.
+# Create internal/core/ directories.
 announce "Building library packages"
 move_file_map libs
 
@@ -315,12 +315,14 @@ sed -i 's~\.\/api~./staging/api~g' go.mod
 # 2. Run wholesale sed commands from above.
 run_sed_map seds
 
-# 3. Replace pkg/core/<component>/pkg/<dir> with pkg/core/<component>/<dir>
-find . -name '*.go' | xargs sed -r -i -e 's~(github.com/projectcalico/calico/pkg/core.*/)pkg/~\1~g'
+# 3. Replace internal/core/<component>/pkg/<dir> with internal/core/<component>/<dir>
+find . -name '*.go' | xargs sed -r -i -e 's~(github.com/projectcalico/calico/internal/core.*/)pkg/~\1~g'
 
 # 4. Fix up lib.Makefile references now that things have moved.
-find ./pkg/core -name Makefile | xargs sed -i 's~include ../lib.Makefile~include ../../../lib.Makefile~g'
-find ./pkg/core -name Makefile | xargs sed -i 's~include ../metadata.mk~include ../../../metadata.mk~g'
+find ./internal/core -name Makefile | xargs sed -i 's~include ../lib.Makefile~include ../../../lib.Makefile~g'
+find ./internal/core -name Makefile | xargs sed -i 's~include ../metadata.mk~include ../../../metadata.mk~g'
+find ./internal/lib -name Makefile | xargs sed -i 's~include ../lib.Makefile~include ../../lib.Makefile~g'
+find ./internal/lib -name Makefile | xargs sed -i 's~include ../metadata.mk~include ../../metadata.mk~g'
 
 # Commit what we've got so far.
 announce "Committing changes to git"
