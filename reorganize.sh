@@ -34,6 +34,7 @@ function run_sed_map() {
     replace=${sedmap[$pattern]}
     echo "sed $pattern -> $replace"
     find . -name '*.go' | xargs sed -i "s~${pattern}~${replace}~g"
+    find . -name 'Makefile' | xargs sed -i "s~${pattern}~${replace}~g"
   done
 }
 
