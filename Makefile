@@ -19,6 +19,52 @@ DOCKER_RUN := mkdir -p ./.go-pkg-cache bin $(GOMOD_CACHE) && \
 		-v $(CURDIR)/.go-pkg-cache:/go-cache:rw \
 		-w /go/src/$(PACKAGE_NAME)
 
+# Core binaries.
+CORE_BIN:= output/$(ARCH)/core/apiserver/apiserver \
+			 output/$(ARCH)/core/calicoctl/calicoctl \
+			 output/$(ARCH)/core/csi/main \
+			 output/$(ARCH)/core/node/calico-node \
+			 output/$(ARCH)/core/dikastes/main \
+			 output/$(ARCH)/core/goldmane/main \
+			 output/$(ARCH)/core/guardian/main \
+			 output/$(ARCH)/core/kube-controllers/main \
+			 output/$(ARCH)/core/whisker-backend/main \
+			 output/$(ARCH)/core/typha/main
+
+core:
+	$(MAKE) -C ./internal/core/felix/ libbpf # TODO: Integrate.
+	$(DOCKER_GO_BUILD) make $(CORE_BIN)
+
+output/$(ARCH)/core/apiserver/apiserver:
+	$(call build_binary, ./cmd/core/apiserver/main.go, $@)
+output/$(ARCH)/core/calicoctl/calicoctl:
+	$(call build_binary, ./cmd/core/calicoctl/main.go, $@)
+output/$(ARCH)/core/cni-plugin/calico:
+	$(call build_binary, ./cmd/core/cni-plugin/calico.go, $@)
+	$(call build_binary, ./cmd/core/cni-plugin/install.go, $@)
+output/$(ARCH)/core/csi/main:
+	$(call build_binary, ./cmd/core/csi/main.go, $@)
+output/$(ARCH)/core/dikastes/main:
+	$(call build_binary, ./cmd/core/dikastes/main.go, $@)
+output/$(ARCH)/core/goldmane/main:
+	$(call build_binary, ./cmd/core/goldmane/main.go, $@)
+output/$(ARCH)/core/guardian/main:
+	$(call build_binary, ./cmd/core/guardian/main.go, $@)
+output/$(ARCH)/core/kube-controllers/main:
+	$(call build_binary, ./cmd/core/kube-controllers/main.go, $@)
+output/$(ARCH)/core/typha/main:
+	$(call build_binary, ./cmd/core/typha/main.go, $@)
+output/$(ARCH)/core/whisker-backend/main:
+	$(call build_binary, ./cmd/core/whisker-backend/main.go, $@)
+
+# This must be run within a container, as it expects C header files from the build environment.
+output/$(ARCH)/core/node/calico-node:
+ifeq ($(ARCH),$(filter $(ARCH),amd64 arm64))
+	$(call build_cgo_binary, ./cmd/core/calico-node/main.go, $@)
+else
+	$(call build_binary, ./cmd/core/calico-node/main.go, $@)
+endif
+
 clean:
 	rm -rf ./bin
 

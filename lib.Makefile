@@ -167,20 +167,12 @@ endef
 
 # Use this when building binaries that need cgo, but have no crypto and therefore would not contain any boring symbols.
 define build_cgo_binary
-	$(DOCKER_RUN) \
-		-e CGO_ENABLED=1 \
-		-e CGO_CFLAGS=$(CGO_CFLAGS) \
-		-e CGO_LDFLAGS=$(CGO_LDFLAGS) \
-		$(CALICO_BUILD) \
-		sh -c '$(GIT_CONFIG_SSH) go build -o $(2) -v -buildvcs=false -ldflags "$(LDFLAGS)" $(1)'
+		CGO_ENABLED=1 CGO_CFLAGS=$(CGO_CFLAGS) CGO_LDFLAGS=$(CGO_LDFLAGS) go build -o $(2) -v -buildvcs=false -ldflags "$(LDFLAGS)" $(1)
 endef
 
 # For binaries that do not require boring crypto.
 define build_binary
-	$(DOCKER_RUN) \
-		-e CGO_ENABLED=0 \
-		$(CALICO_BUILD) \
-		sh -c '$(GIT_CONFIG_SSH) go build -o $(2) -v -buildvcs=false -ldflags "$(LDFLAGS)" $(1)'
+		CGO_ENABLED=0 go build -o $(2) -v -buildvcs=false -ldflags "$(LDFLAGS)" $(1)
 endef
 
 # For windows builds that do not require cgo.
