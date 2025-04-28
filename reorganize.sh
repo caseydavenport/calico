@@ -158,6 +158,7 @@ pkgs["guardian"]="internal/core/guardian"
 pkgs["key-cert-provisioner"]="internal/core/key-cert-provisioner"
 pkgs["kube-controllers"]="internal/core/kube-controllers"
 pkgs["node"]="internal/core/node"
+pkgs["confd"]="internal/core/confd"
 pkgs["pod2daemon"]="internal/core/pod2daemon"
 pkgs["typha"]="internal/core/typha"
 pkgs["whisker-backend"]="internal/core/whisker-backend"
@@ -208,7 +209,7 @@ seds["github.com/projectcalico/calico/typha"]="$CORE_PKGS/typha"
 seds["github.com/projectcalico/calico/goldmane"]="$CORE_PKGS/goldmane"
 seds["github.com/projectcalico/calico/apiserver"]="$CORE_PKGS/apiserver"
 seds["github.com/projectcalico/calico/node"]="$CORE_PKGS/node"
-seds["github.com/projectcalico/calico/confd"]="$CORE_PKGS/node/confd"
+seds["github.com/projectcalico/calico/confd"]="$CORE_PKGS/confd"
 seds["github.com/projectcalico/calico/pod2daemon"]="$CORE_PKGS/pod2daemon"
 seds["github.com/projectcalico/calico/whisker-backend"]="$CORE_PKGS/whisker-backend"
 seds["github.com/projectcalico/calico/kube-controllers"]="$CORE_PKGS/kube-controllers"
@@ -283,7 +284,6 @@ cleanup_empty_dirs
 # Create internal/core/ directories.
 announce "Moving pkg/ files into internal/core"
 move_file_map pkgs
-git mv confd internal/core/node/confd/               # Do this after, since it's moving within another directory.
 
 # Create internal/core/ directories.
 announce "Building library packages"
