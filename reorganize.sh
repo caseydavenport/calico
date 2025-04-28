@@ -219,8 +219,8 @@ seds["github.com/projectcalico/calico/key-cert-provisioner"]="$CORE_PKGS/key-cer
 
 # Library packages.
 seds["github.com/projectcalico/calico/crypto"]="github.com/projectcalico/calico/lib/crypto"
-seds["github.com/projectcalico/calico/libcalico-go/lib"]="github.com/projectcalico/calico/internal"
-seds["github.com/projectcalico/calico/libcalico-go/config"]="github.com/projectcalico/calico/internal/customresources"
+seds["github.com/projectcalico/calico/libcalico-go/lib"]="github.com/projectcalico/calico/internal/lib"
+seds["github.com/projectcalico/calico/libcalico-go/config"]="github.com/projectcalico/calico/internal/lib/customresources"
 
 # #################################################
 # Declare dockerfiles that should be moved.
