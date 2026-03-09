@@ -89,6 +89,7 @@ export BZ_MCM_PREFIX=${BZ_MCM_PREFIX:-"bz-${PRODUCT}-${RANDOM_TOKEN2}"}
 
 export CLUSTER_NAME=${CLUSTER_NAME:-bz-${PRODUCT}-${RANDOM_TOKEN1}}
 export DIAGS_ARCHIVE_FILENAME=${DIAGS_ARCHIVE_FILENAME:-${PROVISIONER}-${CLUSTER_NAME}-diags.tgz}
+export GS_BUCKET=${GS_BUCKET-semaphore_diags}
 export BANZAI_CORE_BRANCH=${BANZAI_CORE_BRANCH:-""}
 export BZ_TASK_VERSION=${BZ_TASK_VERSION:-"v2.8.1"}
 export SEMAPHORE_AGENT_UPLOAD_JOB_LOGS=${SEMAPHORE_AGENT_UPLOAD_JOB_LOGS:-"when-trimmed"}
@@ -121,6 +122,12 @@ export GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/se
 gcloud auth activate-service-account --key-file="${GOOGLE_APPLICATION_CREDENTIALS}"
 gcloud config set project ${GOOGLE_PROJECT}
 export GOOGLE_ZONE=${GOOGLE_ZONE:-$(gcloud compute zones list --filter="region~'$GOOGLE_REGION'" --format="value(name)" | awk 'BEGIN {srand()} {a[NR]=$0} rand() * NR < 1 {zone=$0} END {print zone}')}
+
+dummy_needrestart_cmd="echo \"[INFO] creating dummy needrestart script in /usr/local/bin\""
+dummy_needrestart_cmd="$dummy_needrestart_cmd; echo \#\!/usr/bin/bash | sudo tee /usr/local/bin/needrestart"
+dummy_needrestart_cmd="$dummy_needrestart_cmd && echo 'echo [DEBUG] dummy needrestart invoked' | sudo tee -a /usr/local/bin/needrestart"
+dummy_needrestart_cmd="$dummy_needrestart_cmd && sudo chmod +x /usr/local/bin/needrestart"
+if ! command -v needrestart; then eval "$dummy_needrestart_cmd"; fi
 
 # Update package lists to ensure the latest versions are available.
 # Temporarily disable needrestart during installation to avoid interactive prompts.
