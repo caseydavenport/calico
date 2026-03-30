@@ -154,15 +154,25 @@ const buildLayout = (connections: Connection[], width: number): FullLayout => {
 
     const eSlot = eTiers.length > 0 ? (eActX - eStart - 30) / eTiers.length : 0;
     const eTierXs = new Map<string, { tierX: number; polX: number }>();
-    eTiers.forEach((t, i) =>
-        eTierXs.set(t, { tierX: eStart + i * eSlot, polX: eStart + i * eSlot + TIER_W / 2 - DOT_R }),
-    );
+    eTiers.forEach((t, i) => {
+        const tierRight = eStart + i * eSlot + TIER_W;
+        const nextTierLeft = i < eTiers.length - 1
+            ? eStart + (i + 1) * eSlot
+            : eActX;
+        const polCenter = tierRight + (nextTierLeft - tierRight) / 2;
+        eTierXs.set(t, { tierX: eStart + i * eSlot, polX: polCenter - DOT_R });
+    });
 
     const iSlot = iTiers.length > 0 ? (iActX - iStart - 30) / iTiers.length : 0;
     const iTierXs = new Map<string, { tierX: number; polX: number }>();
-    iTiers.forEach((t, i) =>
-        iTierXs.set(t, { tierX: iStart + i * iSlot, polX: iStart + i * iSlot + TIER_W / 2 - DOT_R }),
-    );
+    iTiers.forEach((t, i) => {
+        const tierRight = iStart + i * iSlot + TIER_W;
+        const nextTierLeft = i < iTiers.length - 1
+            ? iStart + (i + 1) * iSlot
+            : iActX;
+        const polCenter = tierRight + (nextTierLeft - tierRight) / 2;
+        iTierXs.set(t, { tierX: iStart + i * iSlot, polX: polCenter - DOT_R });
+    });
 
     // Per-tier Y extents for bar spanning
     const eTierYs = new Map<string, { min: number; max: number }>();
@@ -443,7 +453,8 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     // - Allow/Pass: continue to the action badge
                                     const eSegs: { x1: number; x2: number }[] = [];
                                     let eTermX = eBadgeLeft - 4;
-                                    const eVisiblePols: typeof band.egressPols = [];
+                                    type VisiblePol = Policy & { isTrigger?: boolean };
+                                    const eVisiblePols: VisiblePol[] = [];
                                     if (!srcExternal) {
                                         let ex = egressStart(lo);
                                         let terminated = false;
@@ -453,12 +464,19 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                             if (t === '_profile_' || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
 
                                             if (p.trigger) {
-                                                // Default deny: the trigger policy already rendered as the last
-                                                // visible policy. Extend line to the trigger's tier bar right edge.
-                                                const c = lo.egressTierXs.get(t);
+                                                // Add the trigger policy as a gray dot
+                                                const trigger = p.trigger as Policy;
+                                                const c = lo.egressTierXs.get(trigger.tier || t);
                                                 if (c) {
-                                                    eSegs.push({ x1: ex, x2: c.tierX + TIER_W });
-                                                    eTermX = c.tierX + TIER_W + 6;
+                                                    eSegs.push({ x1: ex, x2: c.polX });
+                                                    ex = c.polX + DOT_R * 2 + 2;
+                                                    eVisiblePols.push({ ...trigger, isTrigger: true });
+                                                }
+                                                // Extend line to tier bar right edge
+                                                const tierC = lo.egressTierXs.get(t);
+                                                if (tierC) {
+                                                    eSegs.push({ x1: ex, x2: tierC.tierX + TIER_W });
+                                                    eTermX = tierC.tierX + TIER_W + 2;
                                                 } else {
                                                     eTermX = ex + 4;
                                                 }
@@ -486,7 +504,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     // Build ingress segments — same logic
                                     const iSegs: { x1: number; x2: number }[] = [];
                                     let iTermX = iBadgeLeft - 4;
-                                    const iVisiblePols: typeof band.ingressPols = [];
+                                    const iVisiblePols: VisiblePol[] = [];
                                     if (!dstExternal) {
                                         let ix = ingressStart(lo);
                                         let terminated = false;
@@ -496,10 +514,17 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                             if (t === '_profile_' || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
 
                                             if (p.trigger) {
-                                                const c = lo.ingressTierXs.get(t);
-                                                if (c) {
-                                                    iSegs.push({ x1: ix, x2: c.tierX + TIER_W });
-                                                    iTermX = c.tierX + TIER_W + 6;
+                                                const trigger = p.trigger as Policy;
+                                                const trigC = lo.ingressTierXs.get(trigger.tier || t);
+                                                if (trigC) {
+                                                    iSegs.push({ x1: ix, x2: trigC.polX });
+                                                    ix = trigC.polX + DOT_R * 2 + 2;
+                                                    iVisiblePols.push({ ...trigger, isTrigger: true });
+                                                }
+                                                const tierC = lo.ingressTierXs.get(t);
+                                                if (tierC) {
+                                                    iSegs.push({ x1: ix, x2: tierC.tierX + TIER_W });
+                                                    iTermX = tierC.tierX + TIER_W + 2;
                                                 } else {
                                                     iTermX = ix + 4;
                                                 }
@@ -584,48 +609,53 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 />
                                             ))}
 
-                                            {/* Policy rings on egress — only for visible (non-terminated) policies */}
+                                            {/* Policy dots on egress — gray for trigger policies */}
                                             {!srcExternal && eVisiblePols.map((p, pi) => {
+                                                const vp = p as VisiblePol;
                                                 const t = p.tier || '_profile_';
                                                 const c = lo.egressTierXs.get(t);
                                                 if (!c) return null;
-                                                const ringColor = ACTION_COLORS[p.action] || POLICY_COLOR;
+                                                const dotColor = vp.isTrigger ? '#718096' : (ACTION_COLORS[p.action] || POLICY_COLOR);
+                                                const label = vp.isTrigger ? `${p.name} (triggered)` : `${p.name} (${p.action})`;
                                                 return (
                                                     <g key={`ed-${pi}`}
                                                         onMouseEnter={(e) => {
-                                                            setTooltipContent(`${p.name} (${p.action})`);
+                                                            setTooltipContent(label);
                                                             setTooltipPos({ x: e.clientX, y: e.clientY });
                                                         }}
                                                         onMouseLeave={() => setTooltipContent('')}
                                                     >
                                                         <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
-                                                            fill='transparent'
-                                                            stroke={ringColor}
-                                                            strokeWidth={2}
+                                                            fill={dotColor}
+                                                            stroke='rgba(255,255,255,0.3)'
+                                                            strokeWidth={1}
                                                         />
                                                     </g>
                                                 );
                                             })}
 
-                                            {/* Policy rings on ingress — only visible (non-terminated) policies */}
+                                            {/* Policy dots on ingress — gray for trigger policies */}
                                             {!dstExternal && iVisiblePols.map((p, pi) => {
+                                                const vp = p as VisiblePol;
                                                 const t = p.tier || '_profile_';
                                                 const c = lo.ingressTierXs.get(t);
                                                 if (!c) return null;
-                                                const ringColor = ingressDimmed ? '#4A5568' : (ACTION_COLORS[p.action] || POLICY_COLOR);
+                                                const baseDotColor = vp.isTrigger ? '#718096' : (ACTION_COLORS[p.action] || POLICY_COLOR);
+                                                const dotColor = ingressDimmed ? '#4A5568' : baseDotColor;
+                                                const label = vp.isTrigger ? `${p.name} (triggered)` : `${p.name} (${p.action})`;
                                                 return (
                                                     <g key={`id-${pi}`}
                                                         opacity={ingressDotOpacity}
                                                         onMouseEnter={(e) => {
-                                                            setTooltipContent(`${p.name} (${p.action})`);
+                                                            setTooltipContent(label);
                                                             setTooltipPos({ x: e.clientX, y: e.clientY });
                                                         }}
                                                         onMouseLeave={() => setTooltipContent('')}
                                                     >
                                                         <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
-                                                            fill='transparent'
-                                                            stroke={ringColor}
-                                                            strokeWidth={2}
+                                                            fill={dotColor}
+                                                            stroke={ingressDimmed ? '#4A5568' : 'rgba(255,255,255,0.3)'}
+                                                            strokeWidth={1}
                                                         />
                                                     </g>
                                                 );
