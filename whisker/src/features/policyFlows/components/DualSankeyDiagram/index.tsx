@@ -6,7 +6,7 @@ import {
 } from '../../utils/buildDualSankey';
 import { Policy } from '@/types/api';
 import { FlowLog } from '@/types/render';
-import { Box, Flex, Text, Table, Tbody, Tr, Td } from '@chakra-ui/react';
+import { Box, Flex, Text, Table, Thead, Tbody, Tr, Th, Td } from '@chakra-ui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 const MotionBox = motion(Box);
@@ -828,11 +828,31 @@ const ingressStart = (lo: { ingressTierXs: Map<string, unknown> }) => {
     return (lo.ingressTierXs as Map<string, { tierX: number }>).get(firstTier)!.tierX - 10;
 };
 
+const shortKind = (kind: string) => {
+    const map: Record<string, string> = {
+        CalicoNetworkPolicy: 'CNP',
+        GlobalNetworkPolicy: 'GNP',
+        NetworkPolicy: 'KNP',
+        StagedNetworkPolicy: 'Staged',
+        StagedGlobalNetworkPolicy: 'StagedGNP',
+        Profile: 'Profile',
+    };
+    return map[kind] || kind;
+};
+
 const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, policies }) => (
     <Box flex={1}>
         <Text fontSize='xs' color='gray.500' fontWeight='bold' mb={2} fontFamily='monospace'>{label}</Text>
         {policies.length > 0 ? (
             <Table size='sm' variant='unstyled'>
+                <Thead>
+                    <Tr>
+                        <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Kind</Th>
+                        <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Tier</Th>
+                        <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Policy</Th>
+                        <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Action</Th>
+                    </Tr>
+                </Thead>
                 <Tbody>
                     {policies.flatMap((p, i) => {
                         const isKnsProfile = p.kind === 'Profile' && p.name.startsWith('kns.');
@@ -841,6 +861,7 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
                         if (isKnsProfile) {
                             return [(
                                 <Tr key={i}>
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>Profile</Td>
                                     <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace' />
                                     <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace' fontStyle='italic'>Default Allow</Td>
                                     <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
@@ -856,16 +877,16 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
                             const defaultAction = p.action === 'Deny' ? 'Default Deny' : p.action;
                             const defaultColor = p.action === 'Deny' ? ACTION_COLORS['Default Deny'] : ACTION_COLORS[p.action];
                             return [
-                                // Row 1: the trigger policy with N/A action
                                 <Tr key={`${i}-trigger`}>
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{shortKind(trigger.kind)}</Td>
                                     <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{trigger.tier || tierName}</Td>
                                     <Td color='gray.300' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{trigger.name}</Td>
                                     <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
                                         <Text color='gray.500' fontWeight='bold'>N/A</Text>
                                     </Td>
                                 </Tr>,
-                                // Row 2: end-of-tier default action
                                 <Tr key={`${i}-eot`}>
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace' />
                                     <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{tierName}</Td>
                                     <Td color='gray.400' fontSize='xs' px={1} py={0.5} fontFamily='monospace' fontStyle='italic'>End of Tier</Td>
                                     <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
@@ -875,9 +896,9 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
                             ];
                         }
 
-                        // Regular policy
                         return [(
                             <Tr key={i}>
+                                <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{shortKind(p.kind)}</Td>
                                 <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.tier || 'profile'}</Td>
                                 <Td color='gray.300' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.name}</Td>
                                 <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
