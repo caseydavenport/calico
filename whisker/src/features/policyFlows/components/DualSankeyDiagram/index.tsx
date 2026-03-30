@@ -409,6 +409,13 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     const eActColor = ACTION_COLORS[eAct] || '#718096';
                                     const iActColor = ACTION_COLORS[iAct] || '#718096';
 
+                                    // If egress denies, traffic never reaches ingress
+                                    const egressDenied = eAct === 'Deny';
+                                    // Ingress side is grayed out if egress denied
+                                    const ingressDimmed = egressDenied;
+                                    const ingressOpacity = ingressDimmed ? 0.12 : 0.6;
+                                    const ingressDotOpacity = ingressDimmed ? 0.12 : 1;
+
                                     return (
                                         <g
                                             key={band.flowId}
@@ -429,22 +436,27 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 />
                                             ))}
 
-                                            {/* Bridge */}
-                                            <path
-                                                d={curvedLink(lo.egressActionX + DOT_R * 2 + 2, band.y, ingressStart(lo) - 4, band.y)}
-                                                fill='none' stroke={color}
-                                                strokeWidth={w * 0.7} strokeOpacity={0.3}
-                                                strokeDasharray='3,3' strokeLinecap='round'
-                                            />
+                                            {/* Bridge: only show if egress didn't deny */}
+                                            {!egressDenied && (
+                                                <path
+                                                    d={curvedLink(lo.egressActionX + DOT_R * 2 + 2, band.y, ingressStart(lo) - 4, band.y)}
+                                                    fill='none' stroke={color}
+                                                    strokeWidth={w * 0.7} strokeOpacity={0.3}
+                                                    strokeDasharray='3,3' strokeLinecap='round'
+                                                />
+                                            )}
 
-                                            {/* Ingress flow lines */}
+                                            {/* Ingress flow lines: dimmed if egress denied */}
                                             {iSegs.map((s, si) => (
                                                 <path
                                                     key={`i-${si}`}
                                                     d={curvedLink(s.x1, band.y, s.x2, band.y)}
-                                                    fill='none' stroke={color}
-                                                    strokeWidth={w} strokeOpacity={0.6}
+                                                    fill='none'
+                                                    stroke={ingressDimmed ? '#2D3748' : color}
+                                                    strokeWidth={ingressDimmed ? 1 : w}
+                                                    strokeOpacity={ingressOpacity}
                                                     strokeLinecap='round'
+                                                    strokeDasharray={ingressDimmed ? '2,3' : undefined}
                                                 />
                                             ))}
 
@@ -470,7 +482,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 );
                                             })}
 
-                                            {/* Policy dots on ingress */}
+                                            {/* Policy dots on ingress: dimmed if egress denied */}
                                             {band.ingressPols.map((p, pi) => {
                                                 const t = p.tier || '_profile_';
                                                 if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) return null;
@@ -478,6 +490,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 if (!c) return null;
                                                 return (
                                                     <g key={`id-${pi}`}
+                                                        opacity={ingressDotOpacity}
                                                         onMouseEnter={(e) => {
                                                             setTooltipContent(`${p.name} (${p.action})`);
                                                             setTooltipPos({ x: e.clientX, y: e.clientY });
@@ -485,8 +498,9 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                         onMouseLeave={() => setTooltipContent('')}
                                                     >
                                                         <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
-                                                            fill={ACTION_COLORS[p.action] || POLICY_COLOR}
-                                                            stroke='rgba(255,255,255,0.3)' strokeWidth={1}
+                                                            fill={ingressDimmed ? '#2D3748' : (ACTION_COLORS[p.action] || POLICY_COLOR)}
+                                                            stroke={ingressDimmed ? '#4A5568' : 'rgba(255,255,255,0.3)'}
+                                                            strokeWidth={1}
                                                         />
                                                     </g>
                                                 );
@@ -502,15 +516,20 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 {eAct}
                                             </text>
 
-                                            {/* Ingress action dot */}
+                                            {/* Ingress action dot: dimmed if egress denied */}
                                             <circle cx={lo.ingressActionX + DOT_R} cy={band.y} r={DOT_R + 1}
-                                                fill={iActColor} stroke='rgba(255,255,255,0.4)' strokeWidth={1.5}
+                                                fill={ingressDimmed ? '#2D3748' : iActColor}
+                                                stroke={ingressDimmed ? '#4A5568' : 'rgba(255,255,255,0.4)'}
+                                                strokeWidth={1.5}
+                                                opacity={ingressDotOpacity}
                                             />
-                                            <text x={lo.ingressActionX + DOT_R * 2 + 6} y={band.y} dy='0.35em'
-                                                fontSize={8} fill={iActColor} fontFamily='monospace' fontWeight='bold'
-                                            >
-                                                {iAct}
-                                            </text>
+                                            {!ingressDimmed && (
+                                                <text x={lo.ingressActionX + DOT_R * 2 + 6} y={band.y} dy='0.35em'
+                                                    fontSize={8} fill={iActColor} fontFamily='monospace' fontWeight='bold'
+                                                >
+                                                    {iAct}
+                                                </text>
+                                            )}
 
                                             {/* Protocol/port label near center */}
                                             <text
