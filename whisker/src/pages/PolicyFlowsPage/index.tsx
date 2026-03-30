@@ -1,10 +1,11 @@
 import React from 'react';
 import { Box, Flex, Heading, Text, Button, ButtonGroup } from '@chakra-ui/react';
-import PolicySankeyDiagram from '@/features/policyFlows/components/PolicySankeyDiagram';
+import DualSankeyDiagram from '@/features/policyFlows/components/DualSankeyDiagram';
 import api from '@/api';
 import { FlowLog as ApiFlowLog } from '@/types/api';
 import { FlowLog } from '@/types/render';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { v4 as uuid } from 'uuid';
 
 type FlowsApiResponse = {
@@ -28,7 +29,18 @@ const useFlowsList = () =>
 const PolicyFlowsPage: React.FC = () => {
     const [metric, setMetric] = React.useState<'bytes' | 'packets'>('bytes');
     const [showPending, setShowPending] = React.useState(false);
+    const navigate = useNavigate();
     const { data: flows, isLoading } = useFlowsList();
+
+    const handleFlowSelect = React.useCallback(
+        (sourceName: string, sourceNamespace: string, destName: string, destNamespace: string) => {
+            const params = new URLSearchParams();
+            params.set('src', `${sourceNamespace}/${sourceName}`);
+            params.set('dst', `${destNamespace}/${destName}`);
+            navigate(`/topology?${params.toString()}`);
+        },
+        [navigate],
+    );
 
     return (
         <Box p={4} h='100%'>
@@ -82,7 +94,9 @@ const PolicyFlowsPage: React.FC = () => {
                 borderRadius='lg'
                 border='1px solid'
                 borderColor='gray.700'
-                overflow='hidden'
+                overflowX='hidden'
+                overflowY='auto'
+                maxH='calc(100vh - 180px)'
             >
                 {isLoading ? (
                     <Flex
@@ -94,12 +108,13 @@ const PolicyFlowsPage: React.FC = () => {
                         <Text>Loading flow data...</Text>
                     </Flex>
                 ) : (
-                    <PolicySankeyDiagram
+                    <DualSankeyDiagram
                         flows={flows || []}
                         width={1200}
                         height={550}
                         metric={metric}
                         showPending={showPending}
+                        onFlowSelect={handleFlowSelect}
                     />
                 )}
             </Box>

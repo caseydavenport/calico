@@ -8,6 +8,11 @@ export default defineConfig({
     plugins: [pluginReact(), pluginTypeCheck()],
     server: {
         port: 3000,
+        proxy: {
+            '/flows': 'http://localhost:3002',
+            '/flows-filter-hints': 'http://localhost:3002',
+            '/statistics': 'http://localhost:3002',
+        },
     },
     html: {
         template: './index.html',

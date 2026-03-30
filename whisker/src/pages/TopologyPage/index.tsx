@@ -5,6 +5,7 @@ import api from '@/api';
 import { FlowLog as ApiFlowLog } from '@/types/api';
 import { FlowLog } from '@/types/render';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { v4 as uuid } from 'uuid';
 
 type FlowsApiResponse = {
@@ -27,6 +28,11 @@ const useFlowsList = () =>
 
 const TopologyPage: React.FC = () => {
     const { data: flows, isLoading } = useFlowsList();
+    const [searchParams] = useSearchParams();
+    // If navigated from the Sankey detail table, auto-select the edge
+    // matching the src/dst query params.
+    const highlightSrc = searchParams.get('src') || undefined;
+    const highlightDst = searchParams.get('dst') || undefined;
     const [dimensions, setDimensions] = React.useState({
         width: 1200,
         height: 700,
@@ -97,6 +103,8 @@ const TopologyPage: React.FC = () => {
                         flows={flows || []}
                         width={dimensions.width - 32}
                         height={dimensions.height}
+                        highlightSrc={highlightSrc}
+                        highlightDst={highlightDst}
                     />
                 )}
             </Box>
