@@ -128,7 +128,8 @@ const PolicyFlowsPage: React.FC = () => {
                 borderRadius='lg'
                 border='1px solid'
                 borderColor='gray.700'
-                overflow='hidden'
+                overflowX='hidden'
+                overflowY='auto'
                 flex={1}
             >
                 {isLoading ? (

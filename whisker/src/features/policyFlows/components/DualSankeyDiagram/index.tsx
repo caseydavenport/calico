@@ -7,6 +7,9 @@ import {
 import { Policy } from '@/types/api';
 import { FlowLog } from '@/types/render';
 import { Box, Flex, Text, Table, Tbody, Tr, Td } from '@chakra-ui/react';
+import { AnimatePresence, motion } from 'framer-motion';
+
+const MotionBox = motion(Box);
 
 type Props = {
     flows: FlowLog[];
@@ -211,16 +214,17 @@ const buildLayout = (connections: Connection[], width: number): FullLayout => {
         curY += blockH + CONN_MARGIN;
     }
 
-    // Tier bars
+    // Tier bars — all span the full chart height for visual consistency
+    const fullTop = TOP_MARGIN;
+    const fullBottom = curY;
+    const fullH = Math.max(fullBottom - fullTop, 20);
     const eTierBars: TierBar[] = eTiers.map((t) => {
         const c = eTierXs.get(t)!;
-        const ext = eTierYs.get(t) || { min: TOP_MARGIN, max: curY };
-        return { tier: t, side: 'egress', x: c.tierX, y: ext.min - 2, h: ext.max - ext.min + 4 };
+        return { tier: t, side: 'egress', x: c.tierX, y: fullTop, h: fullH };
     });
     const iTierBars: TierBar[] = iTiers.map((t) => {
         const c = iTierXs.get(t)!;
-        const ext = iTierYs.get(t) || { min: TOP_MARGIN, max: curY };
-        return { tier: t, side: 'ingress', x: c.tierX, y: ext.min - 2, h: ext.max - ext.min + 4 };
+        return { tier: t, side: 'ingress', x: c.tierX, y: fullTop, h: fullH };
     });
 
     return {
@@ -287,8 +291,8 @@ const DualSankeyDiagram: React.FC<Props> = ({
     const trans = { transition: 'opacity 0.15s ease' };
 
     return (
-        <Box>
-            <Box position='relative' overflowY='auto' maxH='calc(100vh - 250px)' mx='auto'>
+        <Box position='relative' overflow='hidden'>
+            <Box overflowY='auto' h='100%' mx='auto'>
                 <svg width={width} height={effectiveHeight}>
                     {/* Column headers */}
                     <text x={lo.srcX} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>SOURCE</text>
@@ -387,31 +391,40 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     const color = ACTION_COLORS[band.action] || '#718096';
                                     const w = 2 + (band.volume / maxVol) * 4;
 
+                                    // External sources have no egress policies;
+                                    // external destinations have no ingress policies.
+                                    const srcExternal = band.lf.sourceName === 'PRIVATE NETWORK' || band.lf.sourceNamespace === '-';
+                                    const dstExternal = band.lf.destName === 'PRIVATE NETWORK' || band.lf.destNamespace === '-';
+
                                     // Build link segments for egress side
                                     const eSegs: { x1: number; x2: number }[] = [];
-                                    let ex = egressStart(lo);
-                                    for (const p of band.egressPols) {
-                                        const t = p.tier || '_profile_';
-                                        if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
-                                        const c = lo.egressTierXs.get(t);
-                                        if (!c) continue;
-                                        eSegs.push({ x1: ex, x2: c.polX });
-                                        ex = c.polX + DOT_R * 2 + 2;
+                                    if (!srcExternal) {
+                                        let ex = egressStart(lo);
+                                        for (const p of band.egressPols) {
+                                            const t = p.tier || '_profile_';
+                                            if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+                                            const c = lo.egressTierXs.get(t);
+                                            if (!c) continue;
+                                            eSegs.push({ x1: ex, x2: c.polX });
+                                            ex = c.polX + DOT_R * 2 + 2;
+                                        }
+                                        eSegs.push({ x1: ex, x2: lo.egressActionX });
                                     }
-                                    eSegs.push({ x1: ex, x2: lo.egressActionX });
 
                                     // Ingress side
                                     const iSegs: { x1: number; x2: number }[] = [];
-                                    let ix = ingressStart(lo);
-                                    for (const p of band.ingressPols) {
-                                        const t = p.tier || '_profile_';
-                                        if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
-                                        const c = lo.ingressTierXs.get(t);
-                                        if (!c) continue;
-                                        iSegs.push({ x1: ix, x2: c.polX });
-                                        ix = c.polX + DOT_R * 2 + 2;
+                                    if (!dstExternal) {
+                                        let ix = ingressStart(lo);
+                                        for (const p of band.ingressPols) {
+                                            const t = p.tier || '_profile_';
+                                            if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+                                            const c = lo.ingressTierXs.get(t);
+                                            if (!c) continue;
+                                            iSegs.push({ x1: ix, x2: c.polX });
+                                            ix = c.polX + DOT_R * 2 + 2;
+                                        }
+                                        iSegs.push({ x1: ix, x2: lo.ingressActionX });
                                     }
-                                    iSegs.push({ x1: ix, x2: lo.ingressActionX });
 
                                     const eAct = getAction(band.egressPols, band.action);
                                     const iAct = getAction(band.ingressPols, band.action);
@@ -434,8 +447,8 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 selectedFlow === band.flowId ? null : band.flowId,
                                             )}
                                         >
-                                            {/* Egress flow lines */}
-                                            {eSegs.map((s, si) => (
+                                            {/* Egress flow lines (hidden for external sources) */}
+                                            {!srcExternal && eSegs.map((s, si) => (
                                                 <path
                                                     key={`e-${si}`}
                                                     d={curvedLink(s.x1, band.y, s.x2, band.y)}
@@ -445,8 +458,8 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 />
                                             ))}
 
-                                            {/* Bridge: only show if egress didn't deny */}
-                                            {!egressDenied && (
+                                            {/* Bridge: show when traffic crosses (not denied, not external-only) */}
+                                            {!egressDenied && !srcExternal && !dstExternal && (
                                                 <path
                                                     d={curvedLink(lo.egressActionX + DOT_R * 2 + 2, band.y, ingressStart(lo) - 4, band.y)}
                                                     fill='none' stroke={color}
@@ -455,8 +468,8 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 />
                                             )}
 
-                                            {/* Ingress flow lines: dimmed if egress denied */}
-                                            {iSegs.map((s, si) => (
+                                            {/* Ingress flow lines: hidden for external dests, dimmed if egress denied */}
+                                            {!dstExternal && iSegs.map((s, si) => (
                                                 <path
                                                     key={`i-${si}`}
                                                     d={curvedLink(s.x1, band.y, s.x2, band.y)}
@@ -469,12 +482,13 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 />
                                             ))}
 
-                                            {/* Policy dots on egress */}
-                                            {band.egressPols.map((p, pi) => {
+                                            {/* Policy rings on egress (open circles = pass-through) */}
+                                            {!srcExternal && band.egressPols.map((p, pi) => {
                                                 const t = p.tier || '_profile_';
                                                 if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) return null;
                                                 const c = lo.egressTierXs.get(t);
                                                 if (!c) return null;
+                                                const ringColor = ACTION_COLORS[p.action] || POLICY_COLOR;
                                                 return (
                                                     <g key={`ed-${pi}`}
                                                         onMouseEnter={(e) => {
@@ -484,19 +498,21 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                         onMouseLeave={() => setTooltipContent('')}
                                                     >
                                                         <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
-                                                            fill={ACTION_COLORS[p.action] || POLICY_COLOR}
-                                                            stroke='rgba(255,255,255,0.3)' strokeWidth={1}
+                                                            fill='transparent'
+                                                            stroke={ringColor}
+                                                            strokeWidth={2}
                                                         />
                                                     </g>
                                                 );
                                             })}
 
-                                            {/* Policy dots on ingress: dimmed if egress denied */}
-                                            {band.ingressPols.map((p, pi) => {
+                                            {/* Policy rings on ingress: hidden for external dests, dimmed if egress denied */}
+                                            {!dstExternal && band.ingressPols.map((p, pi) => {
                                                 const t = p.tier || '_profile_';
                                                 if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) return null;
                                                 const c = lo.ingressTierXs.get(t);
                                                 if (!c) return null;
+                                                const ringColor = ingressDimmed ? '#4A5568' : (ACTION_COLORS[p.action] || POLICY_COLOR);
                                                 return (
                                                     <g key={`id-${pi}`}
                                                         opacity={ingressDotOpacity}
@@ -507,38 +523,80 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                         onMouseLeave={() => setTooltipContent('')}
                                                     >
                                                         <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
-                                                            fill={ingressDimmed ? '#2D3748' : (ACTION_COLORS[p.action] || POLICY_COLOR)}
-                                                            stroke={ingressDimmed ? '#4A5568' : 'rgba(255,255,255,0.3)'}
-                                                            strokeWidth={1}
+                                                            fill='transparent'
+                                                            stroke={ringColor}
+                                                            strokeWidth={2}
                                                         />
                                                     </g>
                                                 );
                                             })}
 
-                                            {/* Egress action dot */}
-                                            <circle cx={lo.egressActionX + DOT_R} cy={band.y} r={DOT_R + 1}
-                                                fill={eActColor} stroke='rgba(255,255,255,0.4)' strokeWidth={1.5}
-                                            />
-                                            <text x={lo.egressActionX + DOT_R * 2 + 6} y={band.y} dy='0.35em'
-                                                fontSize={11} fill={eActColor} fontFamily='monospace' fontWeight='bold'
-                                            >
-                                                {eAct}
-                                            </text>
+                                            {/* Egress action badge: right-aligned, hidden for external sources */}
+                                            {!srcExternal && (() => {
+                                                const badgeW = eAct.length * 7.5 + 14;
+                                                const badgeH = 18;
+                                                // Right-align: right edge at egressActionX + fixed width
+                                                const badgeRight = lo.egressActionX + 100;
+                                                const bx = badgeRight - badgeW;
+                                                const by = band.y - badgeH / 2;
+                                                return (
+                                                    <g>
+                                                        <rect
+                                                            x={bx} y={by}
+                                                            width={badgeW} height={badgeH}
+                                                            rx={badgeH / 2}
+                                                            fill={eActColor}
+                                                            opacity={0.9}
+                                                        />
+                                                        <text
+                                                            x={bx + badgeW / 2} y={band.y}
+                                                            dy='0.35em'
+                                                            textAnchor='middle'
+                                                            fontSize={10}
+                                                            fontWeight='bold'
+                                                            fill='#1A202C'
+                                                            fontFamily='monospace'
+                                                        >
+                                                            {eAct}
+                                                        </text>
+                                                    </g>
+                                                );
+                                            })()}
 
-                                            {/* Ingress action dot: dimmed if egress denied */}
-                                            <circle cx={lo.ingressActionX + DOT_R} cy={band.y} r={DOT_R + 1}
-                                                fill={ingressDimmed ? '#2D3748' : iActColor}
-                                                stroke={ingressDimmed ? '#4A5568' : 'rgba(255,255,255,0.4)'}
-                                                strokeWidth={1.5}
-                                                opacity={ingressDotOpacity}
-                                            />
-                                            {!ingressDimmed && (
-                                                <text x={lo.ingressActionX + DOT_R * 2 + 6} y={band.y} dy='0.35em'
-                                                    fontSize={11} fill={iActColor} fontFamily='monospace' fontWeight='bold'
-                                                >
-                                                    {iAct}
-                                                </text>
-                                            )}
+                                            {/* Ingress action badge: right-aligned, hidden for external dests, dimmed if egress denied */}
+                                            {!dstExternal && (() => {
+                                                const badgeW = iAct.length * 7.5 + 14;
+                                                const badgeH = 18;
+                                                const badgeRight = lo.ingressActionX + 100;
+                                                const bx = badgeRight - badgeW;
+                                                const by = band.y - badgeH / 2;
+                                                const dimFill = ingressDimmed ? '#2D3748' : iActColor;
+                                                const dimTextFill = ingressDimmed ? '#4A5568' : '#1A202C';
+                                                return (
+                                                    <g opacity={ingressDotOpacity}>
+                                                        <rect
+                                                            x={bx} y={by}
+                                                            width={badgeW} height={badgeH}
+                                                            rx={badgeH / 2}
+                                                            fill={dimFill}
+                                                            opacity={0.9}
+                                                        />
+                                                        {!ingressDimmed && (
+                                                            <text
+                                                                x={bx + badgeW / 2} y={band.y}
+                                                                dy='0.35em'
+                                                                textAnchor='middle'
+                                                                fontSize={10}
+                                                                fontWeight='bold'
+                                                                fill={dimTextFill}
+                                                                fontFamily='monospace'
+                                                            >
+                                                                {iAct}
+                                                            </text>
+                                                        )}
+                                                    </g>
+                                                );
+                                            })()}
 
                                             {/* Protocol/port label near center */}
                                             <text
@@ -569,40 +627,66 @@ const DualSankeyDiagram: React.FC<Props> = ({
                 )}
             </Box>
 
-            {/* Detail panel */}
-            {selectedLF && (
-                <Box bg='gray.800' borderRadius='lg' border='1px solid' borderColor='gray.600' mt={3} p={4} mx='auto'>
-                    <Flex justify='space-between' align='center' mb={3}>
-                        <Box>
-                            <Text color='white' fontWeight='bold' fontSize='sm' fontFamily='monospace'>
-                                {selectedLF.sourceNamespace}/{selectedLF.sourceName} → {selectedLF.destNamespace}/{selectedLF.destName}
-                            </Text>
-                            <Flex gap={4} mt={1} fontSize='xs' color='gray.400' fontFamily='monospace'>
-                                <Text>{selectedLF.protocol}:{selectedLF.destPort}</Text>
-                                <Text>{formatValue(selectedLF.volume, metric)}</Text>
-                                <Text color={ACTION_COLORS[selectedLF.action] || 'gray.400'} fontWeight='bold'>
-                                    {selectedLF.action}
+            {/* Sliding detail panel overlay */}
+            <AnimatePresence>
+                {selectedLF && (
+                    <MotionBox
+                        position='absolute'
+                        bottom={0}
+                        left={0}
+                        right={0}
+                        bg='gray.800'
+                        borderTop='1px solid'
+                        borderColor='gray.600'
+                        p={5}
+                        initial={{ y: '100%' }}
+                        animate={{ y: 0 }}
+                        exit={{ y: '100%' }}
+                        transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+                        boxShadow='0 -4px 20px rgba(0,0,0,0.4)'
+                        zIndex={10}
+                    >
+                        <Flex justify='space-between' align='center' mb={3}>
+                            <Box>
+                                <Text color='white' fontWeight='bold' fontSize='md' fontFamily='monospace'>
+                                    {selectedLF.sourceNamespace}/{selectedLF.sourceName}
+                                    {'  →  '}
+                                    {selectedLF.destNamespace}/{selectedLF.destName}
+                                </Text>
+                                <Flex gap={4} mt={1} fontSize='sm' color='gray.400' fontFamily='monospace'>
+                                    <Text>{selectedLF.protocol}:{selectedLF.destPort}</Text>
+                                    <Text>{formatValue(selectedLF.volume, metric)}</Text>
+                                    <Text color={ACTION_COLORS[selectedLF.action] || 'gray.400'} fontWeight='bold'>
+                                        {selectedLF.action}
+                                    </Text>
+                                </Flex>
+                            </Box>
+                            <Flex gap={4} align='center'>
+                                {onFlowSelect && (
+                                    <Text color='blue.300' fontSize='sm' cursor='pointer' fontFamily='monospace'
+                                        onClick={() => onFlowSelect(selectedLF.sourceName, selectedLF.sourceNamespace, selectedLF.destName, selectedLF.destNamespace)}
+                                        _hover={{ color: 'blue.200' }}
+                                    >
+                                        View in Topology →
+                                    </Text>
+                                )}
+                                <Text
+                                    color='gray.500' fontSize='sm' cursor='pointer'
+                                    onClick={() => setSelectedFlow(null)}
+                                    _hover={{ color: 'white' }}
+                                    px={2}
+                                >
+                                    ✕
                                 </Text>
                             </Flex>
-                        </Box>
-                        <Flex gap={3} align='center'>
-                            {onFlowSelect && (
-                                <Text color='blue.300' fontSize='xs' cursor='pointer' fontFamily='monospace'
-                                    onClick={() => onFlowSelect(selectedLF.sourceName, selectedLF.sourceNamespace, selectedLF.destName, selectedLF.destNamespace)}
-                                    _hover={{ color: 'blue.200' }}
-                                >
-                                    Topology →
-                                </Text>
-                            )}
-                            <Text color='gray.500' fontSize='xs' cursor='pointer' onClick={() => setSelectedFlow(null)} _hover={{ color: 'white' }}>✕</Text>
                         </Flex>
-                    </Flex>
-                    <Flex gap={8}>
-                        <PolicyTable label='EGRESS' policies={selectedLF.egressPolicies} />
-                        <PolicyTable label='INGRESS' policies={selectedLF.ingressPolicies} />
-                    </Flex>
-                </Box>
-            )}
+                        <Flex gap={10}>
+                            <PolicyTable label='EGRESS (source-side)' policies={selectedLF.egressPolicies} />
+                            <PolicyTable label='INGRESS (dest-side)' policies={selectedLF.ingressPolicies} />
+                        </Flex>
+                    </MotionBox>
+                )}
+            </AnimatePresence>
         </Box>
     );
 };
