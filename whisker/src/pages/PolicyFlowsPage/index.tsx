@@ -26,6 +26,40 @@ const useFlowsList = () =>
             })),
     });
 
+const AutoSizeDualSankey: React.FC<{
+    flows: FlowLog[];
+    metric: 'bytes' | 'packets';
+    showPending: boolean;
+    onFlowSelect: (sn: string, sns: string, dn: string, dns: string) => void;
+}> = (props) => {
+    const ref = React.useRef<HTMLDivElement>(null);
+    const [dims, setDims] = React.useState({ width: 1400, height: 700 });
+
+    React.useEffect(() => {
+        const update = () => {
+            if (ref.current) {
+                setDims({
+                    width: ref.current.clientWidth,
+                    height: Math.max(ref.current.clientHeight, 500),
+                });
+            }
+        };
+        update();
+        window.addEventListener('resize', update);
+        return () => window.removeEventListener('resize', update);
+    }, []);
+
+    return (
+        <Box ref={ref} w='100%' h='100%' minH='500px'>
+            <DualSankeyDiagram
+                {...props}
+                width={dims.width}
+                height={dims.height}
+            />
+        </Box>
+    );
+};
+
 const PolicyFlowsPage: React.FC = () => {
     const [metric, setMetric] = React.useState<'bytes' | 'packets'>('bytes');
     const [showPending, setShowPending] = React.useState(false);
@@ -43,7 +77,7 @@ const PolicyFlowsPage: React.FC = () => {
     );
 
     return (
-        <Box p={4} h='100%'>
+        <Flex direction='column' p={4} h='100%'>
             <Flex justify='space-between' align='center' mb={4}>
                 <Box>
                     <Heading size='md' color='white'>
@@ -94,9 +128,8 @@ const PolicyFlowsPage: React.FC = () => {
                 borderRadius='lg'
                 border='1px solid'
                 borderColor='gray.700'
-                overflowX='hidden'
-                overflowY='auto'
-                maxH='calc(100vh - 180px)'
+                overflow='hidden'
+                flex={1}
             >
                 {isLoading ? (
                     <Flex
@@ -108,17 +141,15 @@ const PolicyFlowsPage: React.FC = () => {
                         <Text>Loading flow data...</Text>
                     </Flex>
                 ) : (
-                    <DualSankeyDiagram
+                    <AutoSizeDualSankey
                         flows={flows || []}
-                        width={1200}
-                        height={550}
                         metric={metric}
                         showPending={showPending}
                         onFlowSelect={handleFlowSelect}
                     />
                 )}
             </Box>
-        </Box>
+        </Flex>
     );
 };
 

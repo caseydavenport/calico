@@ -40,15 +40,12 @@ const formatValue = (value: number, metric: string) => {
 
 // ── Layout constants ────────────────────────────────────────────────
 
-const CONN_H = 28;         // Height per flow sub-band within a connection
-const CONN_GAP = 4;        // Gap between sub-bands in a connection
-const CONN_MARGIN = 14;    // Gap between connections
-// Pill dimensions unused in dot-based layout but kept for reference.
-// const PILL_H = 20;
-// const PILL_RX = 10;
-const TIER_W = 14;
-const DOT_R = 5;
-const TOP_MARGIN = 38;
+const CONN_H = 38;         // Height per flow sub-band within a connection
+const CONN_GAP = 6;        // Gap between sub-bands in a connection
+const CONN_MARGIN = 22;    // Gap between connections
+const TIER_W = 22;
+const DOT_R = 7;
+const TOP_MARGIN = 48;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -140,12 +137,12 @@ const buildLayout = (connections: Connection[], width: number): FullLayout => {
     const iTiers = getOrderedTiers(connections, 'ingress');
 
     // X positions
-    const srcX = 8;
-    const eStart = 160;
-    const eActX = width / 2 - 55;
-    const iStart = width / 2 + 25;
-    const iActX = width - 190;
-    const dstX = width - 8;
+    const srcX = 12;
+    const eStart = 180;
+    const eActX = width / 2 - 80;
+    const iStart = width / 2 + 40;
+    const iActX = width - 220;
+    const dstX = width - 12;
 
     const eSlot = eTiers.length > 0 ? (eActX - eStart - 30) / eTiers.length : 0;
     const eTierXs = new Map<string, { tierX: number; polX: number }>();
@@ -294,15 +291,15 @@ const DualSankeyDiagram: React.FC<Props> = ({
             <Box position='relative' overflowY='auto' maxH='calc(100vh - 250px)' mx='auto'>
                 <svg width={width} height={effectiveHeight}>
                     {/* Column headers */}
-                    <text x={lo.srcX} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>SOURCE</text>
-                    <text x={160} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>EGRESS POLICIES</text>
-                    <text x={lo.egressActionX} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>ACTION</text>
-                    <text x={width / 2 + 25} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>INGRESS POLICIES</text>
-                    <text x={lo.ingressActionX} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>ACTION</text>
-                    <text x={lo.dstX} y={16} fontSize={9} fill='#718096' fontWeight='bold' textAnchor='end' fontFamily='monospace'>DEST</text>
-                    <line x1={0} y1={24} x2={width} y2={24} stroke='#2D3748' strokeWidth={0.5} />
+                    <text x={lo.srcX} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>SOURCE</text>
+                    <text x={180} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>EGRESS POLICIES</text>
+                    <text x={lo.egressActionX} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>ACTION</text>
+                    <text x={width / 2 + 40} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>INGRESS POLICIES</text>
+                    <text x={lo.ingressActionX} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>ACTION</text>
+                    <text x={lo.dstX} y={22} fontSize={12} fill='#718096' fontWeight='bold' textAnchor='end' fontFamily='monospace'>DEST</text>
+                    <line x1={0} y1={34} x2={width} y2={34} stroke='#2D3748' strokeWidth={0.5} />
                     {/* Center divider */}
-                    <line x1={width / 2 - 12} y1={28} x2={width / 2 - 12} y2={effectiveHeight} stroke='#2D3748' strokeDasharray='2,4' />
+                    <line x1={width / 2 - 18} y1={38} x2={width / 2 - 18} y2={effectiveHeight} stroke='#2D3748' strokeDasharray='2,4' />
 
                     {/* Tier bars with rotated labels inside */}
                     {[...lo.egressTierBars, ...lo.ingressTierBars].map((tb) => {
@@ -320,7 +317,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     textAnchor='middle'
                                     dominantBaseline='central'
                                     transform={`rotate(-90, ${cx}, ${cy})`}
-                                    fontSize={9}
+                                    fontSize={12}
                                     fontWeight='bold'
                                     fill='#CBD5E0'
                                     fontFamily='monospace'
@@ -351,7 +348,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                 {/* Source label */}
                                 <text
                                     x={lo.srcX} y={cl.srcLabelY} dy='0.35em'
-                                    fontSize={10} fill='#E2E8F0' fontFamily='monospace' fontWeight='600'
+                                    fontSize={13} fill='#E2E8F0' fontFamily='monospace' fontWeight='600'
                                     style={{ cursor: 'pointer' }}
                                     onClick={() => setSelectedFlow(null)}
                                     onMouseEnter={() => setHoveredConn(cl.conn.id)}
@@ -361,7 +358,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                 </text>
                                 {cl.conn.flows.length > 1 && (
                                     <text
-                                        x={lo.srcX} y={cl.srcLabelY + 12} fontSize={8} fill='#718096' fontFamily='monospace'
+                                        x={lo.srcX} y={cl.srcLabelY + 12} fontSize={11} fill='#718096' fontFamily='monospace'
                                     >
                                         {cl.conn.sourceNamespace}
                                     </text>
@@ -371,14 +368,14 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                 <text
                                     x={lo.dstX} y={cl.dstLabelY} dy='0.35em'
                                     textAnchor='end'
-                                    fontSize={10} fill='#E2E8F0' fontFamily='monospace' fontWeight='600'
+                                    fontSize={13} fill='#E2E8F0' fontFamily='monospace' fontWeight='600'
                                 >
                                     {cleanName(cl.conn.destName)}
                                 </text>
                                 {cl.conn.flows.length > 1 && (
                                     <text
                                         x={lo.dstX} y={cl.dstLabelY + 12}
-                                        textAnchor='end' fontSize={8} fill='#718096' fontFamily='monospace'
+                                        textAnchor='end' fontSize={11} fill='#718096' fontFamily='monospace'
                                     >
                                         {cl.conn.destNamespace}
                                     </text>
@@ -523,7 +520,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 fill={eActColor} stroke='rgba(255,255,255,0.4)' strokeWidth={1.5}
                                             />
                                             <text x={lo.egressActionX + DOT_R * 2 + 6} y={band.y} dy='0.35em'
-                                                fontSize={8} fill={eActColor} fontFamily='monospace' fontWeight='bold'
+                                                fontSize={11} fill={eActColor} fontFamily='monospace' fontWeight='bold'
                                             >
                                                 {eAct}
                                             </text>
@@ -537,7 +534,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                             />
                                             {!ingressDimmed && (
                                                 <text x={lo.ingressActionX + DOT_R * 2 + 6} y={band.y} dy='0.35em'
-                                                    fontSize={8} fill={iActColor} fontFamily='monospace' fontWeight='bold'
+                                                    fontSize={11} fill={iActColor} fontFamily='monospace' fontWeight='bold'
                                                 >
                                                     {iAct}
                                                 </text>
@@ -545,9 +542,9 @@ const DualSankeyDiagram: React.FC<Props> = ({
 
                                             {/* Protocol/port label near center */}
                                             <text
-                                                x={width / 2 - 12} y={band.y} dy='0.35em'
+                                                x={width / 2 - 18} y={band.y} dy='0.35em'
                                                 textAnchor='middle'
-                                                fontSize={7} fill='#4A5568' fontFamily='monospace'
+                                                fontSize={10} fill='#4A5568' fontFamily='monospace'
                                             >
                                                 {band.lf.protocol}:{band.lf.destPort}
                                             </text>
@@ -614,7 +611,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
 const egressStart = (lo: { egressTierXs: Map<string, unknown>; egressActionX: number }) => {
     const firstTier = [...lo.egressTierXs.keys()][0];
     if (!firstTier) return lo.egressActionX - 20;
-    return 155;
+    return 175;
 };
 
 const ingressStart = (lo: { ingressTierXs: Map<string, unknown> }) => {
