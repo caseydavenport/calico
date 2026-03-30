@@ -1,9 +1,10 @@
 import React from 'react';
 import {
     buildDualSankey,
-    DualSankeyNode,
+    Connection,
     LogicalFlow,
 } from '../../utils/buildDualSankey';
+import { Policy } from '@/types/api';
 import { FlowLog } from '@/types/render';
 import { Box, Flex, Text, Table, Tbody, Tr, Td } from '@chakra-ui/react';
 
@@ -13,12 +14,7 @@ type Props = {
     height?: number;
     metric?: 'bytes' | 'packets';
     showPending?: boolean;
-    onFlowSelect?: (
-        sourceName: string,
-        sourceNamespace: string,
-        destName: string,
-        destNamespace: string,
-    ) => void;
+    onFlowSelect?: (sn: string, sns: string, dn: string, dns: string) => void;
 };
 
 const ACTION_COLORS: Record<string, string> = {
@@ -29,353 +25,216 @@ const ACTION_COLORS: Record<string, string> = {
     Log: '#D69E2E',
 };
 
-const NODE_COLORS: Record<string, string> = {
-    tier: '#4A5568',
-    policy: '#2B6CB0',
-    flow: '#805AD5',
-};
+const TIER_COLOR = '#4A5568';
+const POLICY_COLOR = '#2B6CB0';
 
 const formatValue = (value: number, metric: string) => {
     if (metric === 'bytes') {
         if (value < 1024) return `${value} B`;
         if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-        if (value < 1024 * 1024 * 1024)
-            return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-        return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+        return `${(value / (1024 * 1024)).toFixed(1)} MB`;
     }
     return `${value.toLocaleString()} pkts`;
 };
 
-// ── Manual layout engine ────────────────────────────────────────────
-// Instead of d3-sankey, we position everything ourselves.
-//
-// Structure for each side (egress/ingress):
-//   Column 0: Tier nodes
-//   Column 1+: Policy nodes within each tier
-//
-// The center column has logical flow nodes.
-// Each logical flow gets a horizontal "lane" (Y band).
-// Tiers and policies are positioned within the lanes of
-// the flows that traverse them.
+// ── Layout constants ────────────────────────────────────────────────
 
-type PositionedNode = {
-    node: DualSankeyNode;
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-};
+const CONN_H = 28;         // Height per flow sub-band within a connection
+const CONN_GAP = 4;        // Gap between sub-bands in a connection
+const CONN_MARGIN = 14;    // Gap between connections
+// Pill dimensions unused in dot-based layout but kept for reference.
+// const PILL_H = 20;
+// const PILL_RX = 10;
+const TIER_W = 14;
+const DOT_R = 5;
+const TOP_MARGIN = 38;
 
-type PositionedLink = {
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-    value: number;
-    flowId: string;
-};
+// ── Helpers ─────────────────────────────────────────────────────────
 
-type ManualLayout = {
-    flowNodes: PositionedNode[];
-    egressNodes: PositionedNode[];
-    ingressNodes: PositionedNode[];
-    egressLinks: PositionedLink[];
-    ingressLinks: PositionedLink[];
-    totalHeight: number;
-};
+const cleanName = (name: string) =>
+    name.replace(/-[a-z0-9]{6,10}-\*$/, '-*');
 
-const NODE_H = 22;
-const LANE_GAP = 8;
-const COL_WIDTH = 16;
-const TIER_WIDTH = 20;
-
-// Collect unique tier names in evaluation order for a side.
-const getOrderedTiers = (flows: LogicalFlow[], side: 'egress' | 'ingress'): string[] => {
+const getOrderedTiers = (
+    connections: Connection[],
+    side: 'egress' | 'ingress',
+): string[] => {
     const seen = new Set<string>();
     const result: string[] = [];
-    for (const lf of flows) {
-        const policies = side === 'egress' ? lf.egressPolicies : lf.ingressPolicies;
-        for (const p of policies) {
-            const tier = p.tier || '_profile_';
-            if (tier === '_profile_') continue;
-            if (!seen.has(tier)) {
-                seen.add(tier);
-                result.push(tier);
+    for (const conn of connections) {
+        for (const lf of conn.flows) {
+            const pols = side === 'egress' ? lf.egressPolicies : lf.ingressPolicies;
+            for (const p of pols) {
+                const t = p.tier || '_profile_';
+                if (t !== '_profile_' && !seen.has(t)) {
+                    seen.add(t);
+                    result.push(t);
+                }
             }
         }
     }
     return result;
 };
 
-// Layout columns left-to-right:
-//  [Source] [Egress Tier|Policy...] [Egress Action] || [Ingress Tier|Policy...] [Ingress Action] [Dest]
-const buildManualLayout = (
-    flows: LogicalFlow[],
-    width: number,
-): ManualLayout => {
-    const centerX = width / 2;
-    const laneHeight = NODE_H + LANE_GAP;
-    const topMargin = 35;
+const getAction = (pols: Policy[], flowAction: string): string => {
+    if (pols.length === 0) return flowAction;
+    const last = pols[pols.length - 1];
+    if (last.trigger) return last.action;
+    if (last.kind === 'Profile' && last.name?.startsWith('kns.')) return 'Default Allow';
+    return last.action;
+};
 
-    const flowNodes: PositionedNode[] = [];
-    const egressNodes: PositionedNode[] = [];
-    const ingressNodes: PositionedNode[] = [];
-    const egressLinks: PositionedLink[] = [];
-    const ingressLinks: PositionedLink[] = [];
+const curvedLink = (x1: number, y1: number, x2: number, y2: number) => {
+    const dx = Math.abs(x2 - x1);
+    const cp = Math.min(dx * 0.4, 30);
+    return `M${x1},${y1} C${x1 + cp},${y1} ${x2 - cp},${y2} ${x2},${y2}`;
+};
 
-    const egressTiers = getOrderedTiers(flows, 'egress');
-    const ingressTiers = getOrderedTiers(flows, 'ingress');
+// ── Layout engine ───────────────────────────────────────────────────
 
-    // Define fixed X regions.
-    // Left half:  [srcLabel] [eTier0][ePol0] [eTier1][ePol1] ... [eAction]  ||
-    // Right half: || [iTier0][iPol0] [iTier1][iPol1] ... [iAction] [dstLabel]
-    const srcLabelX = 10;
-    const egressStart = 160;
-    const egressActionX = centerX - 50;
-    const ingressStart = centerX + 20;
-    const ingressActionX = width - 180;
-    const dstLabelX = width - 10;
+type Band = {
+    flowId: string;
+    action: string;
+    volume: number;
+    y: number; // center Y of this sub-band
+    egressPols: Policy[];
+    ingressPols: Policy[];
+    lf: LogicalFlow;
+};
 
-    // Space egress tier+policy columns evenly between egressStart and egressActionX
-    const eColCount = egressTiers.length;
-    const eSlotWidth = eColCount > 0 ? (egressActionX - egressStart - 30) / eColCount : 0;
-    const egressTierX = new Map<string, { tierX: number; policyX: number }>();
-    egressTiers.forEach((tier, i) => {
-        egressTierX.set(tier, {
-            tierX: egressStart + i * eSlotWidth,
-            policyX: egressStart + i * eSlotWidth + TIER_WIDTH + 4,
+type ConnLayout = {
+    conn: Connection;
+    y: number; // top Y of the connection block
+    h: number; // total height
+    srcLabelY: number;
+    dstLabelY: number;
+    bands: Band[];
+};
+
+type TierBar = {
+    tier: string;
+    side: 'egress' | 'ingress';
+    x: number;
+    y: number;
+    h: number;
+};
+
+type FullLayout = {
+    conns: ConnLayout[];
+    egressTierBars: TierBar[];
+    ingressTierBars: TierBar[];
+    totalHeight: number;
+    // Column X positions
+    srcX: number;
+    egressTierXs: Map<string, { tierX: number; polX: number }>;
+    egressActionX: number;
+    ingressTierXs: Map<string, { tierX: number; polX: number }>;
+    ingressActionX: number;
+    dstX: number;
+};
+
+const buildLayout = (connections: Connection[], width: number): FullLayout => {
+    const eTiers = getOrderedTiers(connections, 'egress');
+    const iTiers = getOrderedTiers(connections, 'ingress');
+
+    // X positions
+    const srcX = 8;
+    const eStart = 160;
+    const eActX = width / 2 - 55;
+    const iStart = width / 2 + 25;
+    const iActX = width - 190;
+    const dstX = width - 8;
+
+    const eSlot = eTiers.length > 0 ? (eActX - eStart - 30) / eTiers.length : 0;
+    const eTierXs = new Map<string, { tierX: number; polX: number }>();
+    eTiers.forEach((t, i) =>
+        eTierXs.set(t, { tierX: eStart + i * eSlot, polX: eStart + i * eSlot + TIER_W + 4 }),
+    );
+
+    const iSlot = iTiers.length > 0 ? (iActX - iStart - 30) / iTiers.length : 0;
+    const iTierXs = new Map<string, { tierX: number; polX: number }>();
+    iTiers.forEach((t, i) =>
+        iTierXs.set(t, { tierX: iStart + i * iSlot, polX: iStart + i * iSlot + TIER_W + 4 }),
+    );
+
+    // Per-tier Y extents for bar spanning
+    const eTierYs = new Map<string, { min: number; max: number }>();
+    const iTierYs = new Map<string, { min: number; max: number }>();
+
+    let curY = TOP_MARGIN;
+    const conns: ConnLayout[] = [];
+
+    for (const conn of connections) {
+        const nFlows = conn.flows.length;
+        const blockH = nFlows * CONN_H + (nFlows - 1) * CONN_GAP;
+        const bands: Band[] = [];
+
+        conn.flows.forEach((lf, fi) => {
+            const bandY = curY + fi * (CONN_H + CONN_GAP) + CONN_H / 2;
+            bands.push({
+                flowId: lf.id,
+                action: lf.action,
+                volume: lf.volume,
+                y: bandY,
+                egressPols: [...lf.egressPolicies].sort((a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0)),
+                ingressPols: [...lf.ingressPolicies].sort((a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0)),
+                lf,
+            });
+
+            // Track tier Y extents
+            for (const p of lf.egressPolicies) {
+                const t = p.tier || '_profile_';
+                if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+                const ext = eTierYs.get(t) || { min: bandY - CONN_H / 2, max: bandY + CONN_H / 2 };
+                ext.min = Math.min(ext.min, bandY - CONN_H / 2);
+                ext.max = Math.max(ext.max, bandY + CONN_H / 2);
+                eTierYs.set(t, ext);
+            }
+            for (const p of lf.ingressPolicies) {
+                const t = p.tier || '_profile_';
+                if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+                const ext = iTierYs.get(t) || { min: bandY - CONN_H / 2, max: bandY + CONN_H / 2 };
+                ext.min = Math.min(ext.min, bandY - CONN_H / 2);
+                ext.max = Math.max(ext.max, bandY + CONN_H / 2);
+                iTierYs.set(t, ext);
+            }
         });
+
+        conns.push({
+            conn,
+            y: curY,
+            h: blockH,
+            srcLabelY: curY + blockH / 2,
+            dstLabelY: curY + blockH / 2,
+            bands,
+        });
+
+        curY += blockH + CONN_MARGIN;
+    }
+
+    // Tier bars
+    const eTierBars: TierBar[] = eTiers.map((t) => {
+        const c = eTierXs.get(t)!;
+        const ext = eTierYs.get(t) || { min: TOP_MARGIN, max: curY };
+        return { tier: t, side: 'egress', x: c.tierX, y: ext.min - 2, h: ext.max - ext.min + 4 };
+    });
+    const iTierBars: TierBar[] = iTiers.map((t) => {
+        const c = iTierXs.get(t)!;
+        const ext = iTierYs.get(t) || { min: TOP_MARGIN, max: curY };
+        return { tier: t, side: 'ingress', x: c.tierX, y: ext.min - 2, h: ext.max - ext.min + 4 };
     });
 
-    // Space ingress tier+policy columns between ingressStart and ingressActionX
-    const iColCount = ingressTiers.length;
-    const iSlotWidth = iColCount > 0 ? (ingressActionX - ingressStart - 30) / iColCount : 0;
-    const ingressTierX = new Map<string, { tierX: number; policyX: number }>();
-    ingressTiers.forEach((tier, i) => {
-        ingressTierX.set(tier, {
-            tierX: ingressStart + i * iSlotWidth,
-            policyX: ingressStart + i * iSlotWidth + TIER_WIDTH + 4,
-        });
-    });
-
-    const egressTierYs = new Map<string, { minY: number; maxY: number }>();
-    const ingressTierYs = new Map<string, { minY: number; maxY: number }>();
-
-    // Determine egress/ingress action label per flow
-    const getTerminalAction = (policies: ReturnType<typeof Object.values<LogicalFlow>>[number]['egressPolicies'], flowAction: string): string => {
-        if (policies.length === 0) return flowAction;
-        const last = policies[policies.length - 1];
-        if (last.trigger) return last.action; // end-of-tier
-        if (last.kind === 'Profile' && last.name.startsWith('kns.')) return 'Default Allow';
-        return last.action;
+    return {
+        conns,
+        egressTierBars: eTierBars,
+        ingressTierBars: iTierBars,
+        totalHeight: curY + 10,
+        srcX,
+        egressTierXs: eTierXs,
+        egressActionX: eActX,
+        ingressTierXs: iTierXs,
+        ingressActionX: iActX,
+        dstX,
     };
-
-    flows.forEach((lf, i) => {
-        const y = topMargin + i * laneHeight;
-        const cy = y + NODE_H / 2;
-
-        // Source label (far left)
-        flowNodes.push({
-            node: {
-                id: `src:${lf.id}`,
-                label: lf.sourceName.replace(/-[a-z0-9]{8,}-\*$/, '-*'),
-                type: 'flow',
-                side: 'egress',
-            },
-            x: srcLabelX,
-            y,
-            w: 0, // text-only, no rect
-            h: NODE_H,
-        });
-
-        // Dest label (far right)
-        flowNodes.push({
-            node: {
-                id: `dst:${lf.id}`,
-                label: lf.destName.replace(/-[a-z0-9]{8,}-\*$/, '-*'),
-                type: 'flow',
-                side: 'ingress',
-            },
-            x: dstLabelX,
-            y,
-            w: 0,
-            h: NODE_H,
-        });
-
-        // Egress action node
-        const eAction = getTerminalAction(lf.egressPolicies, lf.action);
-        egressNodes.push({
-            node: {
-                id: `eaction:${lf.id}`,
-                label: eAction,
-                type: 'policy',
-                side: 'egress',
-            },
-            x: egressActionX,
-            y,
-            w: COL_WIDTH,
-            h: NODE_H,
-        });
-
-        // Ingress action node
-        const iAction = getTerminalAction(lf.ingressPolicies, lf.action);
-        ingressNodes.push({
-            node: {
-                id: `iaction:${lf.id}`,
-                label: iAction,
-                type: 'policy',
-                side: 'ingress',
-            },
-            x: ingressActionX,
-            y,
-            w: COL_WIDTH,
-            h: NODE_H,
-        });
-
-        // Egress policies (left-to-right: tier order matches evaluation order)
-        const ePols = [...lf.egressPolicies].sort(
-            (a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0),
-        );
-        let ePrevRightX = egressStart - 10;
-        for (const p of ePols) {
-            const tier = p.tier || '_profile_';
-            if (tier === '_profile_' || (p.kind === 'Profile' && p.name.startsWith('kns.'))) continue;
-            if (p.trigger) continue;
-            const coords = egressTierX.get(tier);
-            if (!coords) continue;
-
-            const ext = egressTierYs.get(tier) || { minY: y, maxY: y + NODE_H };
-            ext.minY = Math.min(ext.minY, y);
-            ext.maxY = Math.max(ext.maxY, y + NODE_H);
-            egressTierYs.set(tier, ext);
-
-            egressNodes.push({
-                node: {
-                    id: `e:${tier}/${p.name}:${i}`,
-                    label: `${p.name} (${p.action})`,
-                    type: 'policy',
-                    side: 'egress',
-                    tier,
-                    kind: p.kind,
-                },
-                x: coords.policyX,
-                y,
-                w: COL_WIDTH,
-                h: NODE_H,
-            });
-
-            egressLinks.push({
-                x1: ePrevRightX,
-                y1: cy,
-                x2: coords.policyX,
-                y2: cy,
-                value: lf.volume,
-                flowId: lf.id,
-            });
-            ePrevRightX = coords.policyX + COL_WIDTH;
-        }
-        // Link last egress policy → egress action
-        egressLinks.push({
-            x1: ePrevRightX,
-            y1: cy,
-            x2: egressActionX,
-            y2: cy,
-            value: lf.volume,
-            flowId: lf.id,
-        });
-
-        // Divider link: egress action → ingress start
-        egressLinks.push({
-            x1: egressActionX + COL_WIDTH,
-            y1: cy,
-            x2: ingressStart - 10,
-            y2: cy,
-            value: lf.volume,
-            flowId: lf.id,
-        });
-
-        // Ingress policies
-        const iPols = [...lf.ingressPolicies].sort(
-            (a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0),
-        );
-        let iPrevRightX = ingressStart - 10;
-        for (const p of iPols) {
-            const tier = p.tier || '_profile_';
-            if (tier === '_profile_' || (p.kind === 'Profile' && p.name.startsWith('kns.'))) continue;
-            if (p.trigger) continue;
-            const coords = ingressTierX.get(tier);
-            if (!coords) continue;
-
-            const ext = ingressTierYs.get(tier) || { minY: y, maxY: y + NODE_H };
-            ext.minY = Math.min(ext.minY, y);
-            ext.maxY = Math.max(ext.maxY, y + NODE_H);
-            ingressTierYs.set(tier, ext);
-
-            ingressNodes.push({
-                node: {
-                    id: `i:${tier}/${p.name}:${i}`,
-                    label: `${p.name} (${p.action})`,
-                    type: 'policy',
-                    side: 'ingress',
-                    tier,
-                    kind: p.kind,
-                },
-                x: coords.policyX,
-                y,
-                w: COL_WIDTH,
-                h: NODE_H,
-            });
-
-            ingressLinks.push({
-                x1: iPrevRightX,
-                y1: cy,
-                x2: coords.policyX,
-                y2: cy,
-                value: lf.volume,
-                flowId: lf.id,
-            });
-            iPrevRightX = coords.policyX + COL_WIDTH;
-        }
-        // Link last ingress policy → ingress action
-        ingressLinks.push({
-            x1: iPrevRightX,
-            y1: cy,
-            x2: ingressActionX,
-            y2: cy,
-            value: lf.volume,
-            flowId: lf.id,
-        });
-    });
-
-    // Place tier bars spanning their flow lanes
-    for (const tier of egressTiers) {
-        const coords = egressTierX.get(tier);
-        const ext = egressTierYs.get(tier);
-        if (!coords || !ext) continue;
-        egressNodes.push({
-            node: { id: `etier:${tier}`, label: tier, type: 'tier', side: 'egress', tier },
-            x: coords.tierX,
-            y: ext.minY - 4,
-            w: TIER_WIDTH,
-            h: ext.maxY - ext.minY + 8,
-        });
-    }
-    for (const tier of ingressTiers) {
-        const coords = ingressTierX.get(tier);
-        const ext = ingressTierYs.get(tier);
-        if (!coords || !ext) continue;
-        ingressNodes.push({
-            node: { id: `itier:${tier}`, label: tier, type: 'tier', side: 'ingress', tier },
-            x: coords.tierX,
-            y: ext.minY - 4,
-            w: TIER_WIDTH,
-            h: ext.maxY - ext.minY + 8,
-        });
-    }
-
-    const totalHeight = topMargin + flows.length * laneHeight + 20;
-
-    return { flowNodes, egressNodes, ingressNodes, egressLinks, ingressLinks, totalHeight };
 };
 
 // ── Component ───────────────────────────────────────────────────────
@@ -389,7 +248,8 @@ const DualSankeyDiagram: React.FC<Props> = ({
     onFlowSelect,
 }) => {
     const [selectedFlow, setSelectedFlow] = React.useState<string | null>(null);
-    const [tooltipContent, setTooltipContent] = React.useState<string>('');
+    const [hoveredConn, setHoveredConn] = React.useState<string | null>(null);
+    const [tooltipContent, setTooltipContent] = React.useState('');
     const [tooltipPos, setTooltipPos] = React.useState({ x: 0, y: 0 });
 
     const dual = React.useMemo(
@@ -397,18 +257,24 @@ const DualSankeyDiagram: React.FC<Props> = ({
         [flows, metric, showPending],
     );
 
-    const layout = React.useMemo(
-        () => buildManualLayout(dual.logicalFlows, width),
+    const lo = React.useMemo(
+        () => buildLayout(dual.connections, width),
         [dual, width],
     );
 
-    const effectiveHeight = Math.max(height, layout.totalHeight);
-
-    const selectedLogicalFlow = dual.logicalFlows.find(
-        (lf) => lf.id === selectedFlow,
+    const effectiveHeight = Math.max(height, lo.totalHeight);
+    const maxVol = React.useMemo(
+        () => Math.max(...dual.logicalFlows.map((f) => f.volume), 1),
+        [dual],
     );
 
-    if (dual.logicalFlows.length === 0) {
+    const activeConn = hoveredConn || (selectedFlow
+        ? dual.connections.find((c) => c.flows.some((f) => f.id === selectedFlow))?.id || null
+        : null);
+
+    const selectedLF = dual.logicalFlows.find((f) => f.id === selectedFlow);
+
+    if (dual.connections.length === 0) {
         return (
             <Flex align='center' justify='center' h={height} color='gray.500'>
                 <Text>No policy trace data available.</Text>
@@ -416,335 +282,337 @@ const DualSankeyDiagram: React.FC<Props> = ({
         );
     }
 
-    // Build a map from flow ID to action color for link coloring
-    const flowActionColor = React.useMemo(() => {
-        const map = new Map<string, string>();
-        for (const lf of dual.logicalFlows) {
-            map.set(lf.id, ACTION_COLORS[lf.action] || '#718096');
-        }
-        return map;
-    }, [dual]);
-
-    // Compute max volume for link width scaling
-    const maxVolume = React.useMemo(
-        () => Math.max(...dual.logicalFlows.map((lf) => lf.volume), 1),
-        [dual],
-    );
-
-    const renderNode = (pn: PositionedNode) => {
-        const { node, x, y, w, h } = pn;
-        const isTier = node.type === 'tier';
-        const isFlow = node.type === 'flow';
-        const isSrcDst = isFlow && (node.id.startsWith('src:') || node.id.startsWith('dst:'));
-        const isAction = node.id.startsWith('eaction:') || node.id.startsWith('iaction:');
-
-        // Find the parent flow for selection highlighting
-        const parentFlowId = node.id.replace(/^(src:|dst:|eaction:|iaction:)/, 'flow:');
-        const isRelatedToSelected =
-            selectedFlow === null ||
-            parentFlowId === selectedFlow ||
-            isTier;
-        const dimmed = !isRelatedToSelected;
-
-        // Action nodes get action color
-        const color = isAction
-            ? ACTION_COLORS[node.label] || '#718096'
-            : NODE_COLORS[node.type] || '#A0AEC0';
-
-        // Source/dest: text only, no rect
-        if (isSrcDst) {
-            const isSrc = node.id.startsWith('src:');
-            return (
-                <g
-                    key={node.id}
-                    onClick={() => {
-                        const fid = node.id.replace(/^(src:|dst:)/, 'flow:');
-                        setSelectedFlow(selectedFlow === fid ? null : fid);
-                    }}
-                    style={{ cursor: 'pointer' }}
-                >
-                    <text
-                        x={x}
-                        y={y + h / 2}
-                        dy='0.35em'
-                        textAnchor={isSrc ? 'start' : 'end'}
-                        fontSize={10}
-                        fill={dimmed ? '#4A5568' : '#E2E8F0'}
-                        fontFamily='monospace'
-                        fontWeight='bold'
-                    >
-                        {node.label}
-                    </text>
-                </g>
-            );
-        }
-
-        return (
-            <g
-                key={node.id}
-                onMouseEnter={(e) => {
-                    setTooltipContent(node.label);
-                    setTooltipPos({ x: e.clientX, y: e.clientY });
-                }}
-                onMouseLeave={() => setTooltipContent('')}
-            >
-                <rect
-                    x={x}
-                    y={y}
-                    width={isTier ? w : w}
-                    height={h}
-                    fill={color}
-                    stroke={isTier ? '#E2E8F0' : 'none'}
-                    strokeWidth={isTier ? 1 : 0}
-                    rx={isTier ? 4 : 3}
-                    opacity={dimmed ? 0.15 : 1}
-                />
-                {isTier && (
-                    <text
-                        x={node.side === 'egress' ? x - 6 : x + w + 6}
-                        y={y + h / 2}
-                        dy='0.35em'
-                        textAnchor={node.side === 'egress' ? 'end' : 'start'}
-                        fontSize={11}
-                        fontWeight='bold'
-                        fill='#FFF'
-                        fontFamily='monospace'
-                        opacity={dimmed ? 0.15 : 1}
-                    >
-                        {node.label}
-                    </text>
-                )}
-                {!isTier && (
-                    <text
-                        x={node.side === 'egress' ? x + w + 4 : x - 4}
-                        y={y + h / 2}
-                        dy='0.35em'
-                        textAnchor={node.side === 'egress' ? 'start' : 'end'}
-                        fontSize={isAction ? 10 : 9}
-                        fontWeight={isAction ? 'bold' : 'normal'}
-                        fill={isAction ? (ACTION_COLORS[node.label] || '#CBD5E0') : '#CBD5E0'}
-                        fontFamily='monospace'
-                        opacity={dimmed ? 0.15 : 1}
-                    >
-                        {node.label}
-                    </text>
-                )}
-            </g>
-        );
-    };
-
-    const renderLink = (link: PositionedLink, i: number, prefix: string) => {
-        const dimmed = selectedFlow !== null && link.flowId !== selectedFlow;
-        const color = flowActionColor.get(link.flowId) || '#4A5568';
-        // Scale width: min 2, max 8, proportional to volume
-        const w = 2 + (link.value / maxVolume) * 6;
-        return (
-            <line
-                key={`${prefix}-${i}`}
-                x1={link.x1}
-                y1={link.y1}
-                x2={link.x2}
-                y2={link.y2}
-                stroke={color}
-                strokeWidth={w}
-                strokeOpacity={dimmed ? 0.05 : 0.5}
-                strokeLinecap='round'
-            />
-        );
-    };
+    const isActive = (connId: string) => activeConn === null || activeConn === connId;
+    const isBandActive = (flowId: string) => selectedFlow === null || selectedFlow === flowId;
+    const trans = { transition: 'opacity 0.15s ease' };
 
     return (
         <Box>
-            <Box position='relative' overflowY='auto' maxH='calc(100vh - 250px)'>
+            <Box position='relative' overflowY='auto' maxH='calc(100vh - 250px)' mx='auto'>
                 <svg width={width} height={effectiveHeight}>
-                    {/* Headers */}
-                    <text x={10} y={16} fontSize={11} fill='#A0AEC0' fontWeight='bold'>
-                        SOURCE
-                    </text>
-                    <text x={160} y={16} fontSize={11} fill='#A0AEC0' fontWeight='bold'>
-                        EGRESS POLICIES
-                    </text>
-                    <text x={width / 2 - 50} y={16} fontSize={11} fill='#718096' fontWeight='bold'>
-                        ACTION
-                    </text>
-                    <text x={width / 2 + 20} y={16} fontSize={11} fill='#A0AEC0' fontWeight='bold'>
-                        INGRESS POLICIES
-                    </text>
-                    <text x={width - 180} y={16} fontSize={11} fill='#718096' fontWeight='bold'>
-                        ACTION
-                    </text>
-                    <text x={width - 10} y={16} fontSize={11} fill='#A0AEC0' fontWeight='bold' textAnchor='end'>
-                        DEST
-                    </text>
-
+                    {/* Column headers */}
+                    <text x={lo.srcX} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>SOURCE</text>
+                    <text x={160} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>EGRESS POLICIES</text>
+                    <text x={lo.egressActionX} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>ACTION</text>
+                    <text x={width / 2 + 25} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>INGRESS POLICIES</text>
+                    <text x={lo.ingressActionX} y={16} fontSize={9} fill='#718096' fontWeight='bold' fontFamily='monospace'>ACTION</text>
+                    <text x={lo.dstX} y={16} fontSize={9} fill='#718096' fontWeight='bold' textAnchor='end' fontFamily='monospace'>DEST</text>
+                    <line x1={0} y1={24} x2={width} y2={24} stroke='#2D3748' strokeWidth={0.5} />
                     {/* Center divider */}
-                    <line x1={width / 2 - 15} y1={25} x2={width / 2 - 15} y2={effectiveHeight - 5} stroke='#2D3748' strokeWidth={1} strokeDasharray='4,4' />
+                    <line x1={width / 2 - 12} y1={28} x2={width / 2 - 12} y2={effectiveHeight} stroke='#2D3748' strokeDasharray='2,4' />
 
-                    {/* Links (behind nodes) */}
-                    {layout.egressLinks.map((l, i) => renderLink(l, i, 'e'))}
-                    {layout.ingressLinks.map((l, i) => renderLink(l, i, 'i'))}
+                    {/* Tier bars */}
+                    {[...lo.egressTierBars, ...lo.ingressTierBars].map((tb) => (
+                        <g key={`tb-${tb.side}-${tb.tier}`}>
+                            <rect
+                                x={tb.x} y={tb.y} width={TIER_W} height={tb.h}
+                                fill={TIER_COLOR} stroke='#718096' strokeWidth={0.5} rx={3}
+                                opacity={0.7}
+                            />
+                            <text
+                                x={tb.side === 'egress' ? tb.x - 4 : tb.x + TIER_W + 4}
+                                y={tb.y + tb.h / 2} dy='0.35em'
+                                textAnchor={tb.side === 'egress' ? 'end' : 'start'}
+                                fontSize={9} fontWeight='bold' fill='#A0AEC0' fontFamily='monospace'
+                            >
+                                {tb.tier}
+                            </text>
+                        </g>
+                    ))}
 
-                    {/* Nodes */}
-                    {layout.egressNodes.map(renderNode)}
-                    {layout.flowNodes.map(renderNode)}
-                    {layout.ingressNodes.map(renderNode)}
+                    {/* Connections */}
+                    {lo.conns.map((cl) => {
+                        const active = isActive(cl.conn.id);
+                        return (
+                            <g key={cl.conn.id} opacity={active ? 1 : 0.12} style={trans}>
+                                {/* Connection background */}
+                                <rect
+                                    x={lo.srcX}
+                                    y={cl.y - 2}
+                                    width={width - lo.srcX * 2}
+                                    height={cl.h + 4}
+                                    fill='transparent'
+                                    onMouseEnter={() => setHoveredConn(cl.conn.id)}
+                                    onMouseLeave={() => setHoveredConn(null)}
+                                />
+
+                                {/* Source label */}
+                                <text
+                                    x={lo.srcX} y={cl.srcLabelY} dy='0.35em'
+                                    fontSize={10} fill='#E2E8F0' fontFamily='monospace' fontWeight='600'
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => setSelectedFlow(null)}
+                                    onMouseEnter={() => setHoveredConn(cl.conn.id)}
+                                    onMouseLeave={() => setHoveredConn(null)}
+                                >
+                                    {cleanName(cl.conn.sourceName)}
+                                </text>
+                                {cl.conn.flows.length > 1 && (
+                                    <text
+                                        x={lo.srcX} y={cl.srcLabelY + 12} fontSize={8} fill='#718096' fontFamily='monospace'
+                                    >
+                                        {cl.conn.sourceNamespace}
+                                    </text>
+                                )}
+
+                                {/* Dest label */}
+                                <text
+                                    x={lo.dstX} y={cl.dstLabelY} dy='0.35em'
+                                    textAnchor='end'
+                                    fontSize={10} fill='#E2E8F0' fontFamily='monospace' fontWeight='600'
+                                >
+                                    {cleanName(cl.conn.destName)}
+                                </text>
+                                {cl.conn.flows.length > 1 && (
+                                    <text
+                                        x={lo.dstX} y={cl.dstLabelY + 12}
+                                        textAnchor='end' fontSize={8} fill='#718096' fontFamily='monospace'
+                                    >
+                                        {cl.conn.destNamespace}
+                                    </text>
+                                )}
+
+                                {/* Flow bands */}
+                                {cl.bands.map((band) => {
+                                    const bandActive = isBandActive(band.flowId);
+                                    const color = ACTION_COLORS[band.action] || '#718096';
+                                    const w = 2 + (band.volume / maxVol) * 4;
+
+                                    // Build link segments for egress side
+                                    const eSegs: { x1: number; x2: number }[] = [];
+                                    let ex = egressStart(lo);
+                                    for (const p of band.egressPols) {
+                                        const t = p.tier || '_profile_';
+                                        if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+                                        const c = lo.egressTierXs.get(t);
+                                        if (!c) continue;
+                                        eSegs.push({ x1: ex, x2: c.polX });
+                                        ex = c.polX + DOT_R * 2 + 2;
+                                    }
+                                    eSegs.push({ x1: ex, x2: lo.egressActionX });
+
+                                    // Ingress side
+                                    const iSegs: { x1: number; x2: number }[] = [];
+                                    let ix = ingressStart(lo);
+                                    for (const p of band.ingressPols) {
+                                        const t = p.tier || '_profile_';
+                                        if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+                                        const c = lo.ingressTierXs.get(t);
+                                        if (!c) continue;
+                                        iSegs.push({ x1: ix, x2: c.polX });
+                                        ix = c.polX + DOT_R * 2 + 2;
+                                    }
+                                    iSegs.push({ x1: ix, x2: lo.ingressActionX });
+
+                                    const eAct = getAction(band.egressPols, band.action);
+                                    const iAct = getAction(band.ingressPols, band.action);
+                                    const eActColor = ACTION_COLORS[eAct] || '#718096';
+                                    const iActColor = ACTION_COLORS[iAct] || '#718096';
+
+                                    return (
+                                        <g
+                                            key={band.flowId}
+                                            opacity={bandActive ? 1 : 0.25}
+                                            style={{ ...trans, cursor: 'pointer' }}
+                                            onClick={() => setSelectedFlow(
+                                                selectedFlow === band.flowId ? null : band.flowId,
+                                            )}
+                                        >
+                                            {/* Egress flow lines */}
+                                            {eSegs.map((s, si) => (
+                                                <path
+                                                    key={`e-${si}`}
+                                                    d={curvedLink(s.x1, band.y, s.x2, band.y)}
+                                                    fill='none' stroke={color}
+                                                    strokeWidth={w} strokeOpacity={0.6}
+                                                    strokeLinecap='round'
+                                                />
+                                            ))}
+
+                                            {/* Bridge */}
+                                            <path
+                                                d={curvedLink(lo.egressActionX + DOT_R * 2 + 2, band.y, ingressStart(lo) - 4, band.y)}
+                                                fill='none' stroke={color}
+                                                strokeWidth={w * 0.7} strokeOpacity={0.3}
+                                                strokeDasharray='3,3' strokeLinecap='round'
+                                            />
+
+                                            {/* Ingress flow lines */}
+                                            {iSegs.map((s, si) => (
+                                                <path
+                                                    key={`i-${si}`}
+                                                    d={curvedLink(s.x1, band.y, s.x2, band.y)}
+                                                    fill='none' stroke={color}
+                                                    strokeWidth={w} strokeOpacity={0.6}
+                                                    strokeLinecap='round'
+                                                />
+                                            ))}
+
+                                            {/* Policy dots on egress */}
+                                            {band.egressPols.map((p, pi) => {
+                                                const t = p.tier || '_profile_';
+                                                if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) return null;
+                                                const c = lo.egressTierXs.get(t);
+                                                if (!c) return null;
+                                                return (
+                                                    <g key={`ed-${pi}`}
+                                                        onMouseEnter={(e) => {
+                                                            setTooltipContent(`${p.name} (${p.action})`);
+                                                            setTooltipPos({ x: e.clientX, y: e.clientY });
+                                                        }}
+                                                        onMouseLeave={() => setTooltipContent('')}
+                                                    >
+                                                        <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
+                                                            fill={ACTION_COLORS[p.action] || POLICY_COLOR}
+                                                            stroke='rgba(255,255,255,0.3)' strokeWidth={1}
+                                                        />
+                                                    </g>
+                                                );
+                                            })}
+
+                                            {/* Policy dots on ingress */}
+                                            {band.ingressPols.map((p, pi) => {
+                                                const t = p.tier || '_profile_';
+                                                if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) return null;
+                                                const c = lo.ingressTierXs.get(t);
+                                                if (!c) return null;
+                                                return (
+                                                    <g key={`id-${pi}`}
+                                                        onMouseEnter={(e) => {
+                                                            setTooltipContent(`${p.name} (${p.action})`);
+                                                            setTooltipPos({ x: e.clientX, y: e.clientY });
+                                                        }}
+                                                        onMouseLeave={() => setTooltipContent('')}
+                                                    >
+                                                        <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
+                                                            fill={ACTION_COLORS[p.action] || POLICY_COLOR}
+                                                            stroke='rgba(255,255,255,0.3)' strokeWidth={1}
+                                                        />
+                                                    </g>
+                                                );
+                                            })}
+
+                                            {/* Egress action dot */}
+                                            <circle cx={lo.egressActionX + DOT_R} cy={band.y} r={DOT_R + 1}
+                                                fill={eActColor} stroke='rgba(255,255,255,0.4)' strokeWidth={1.5}
+                                            />
+                                            <text x={lo.egressActionX + DOT_R * 2 + 6} y={band.y} dy='0.35em'
+                                                fontSize={8} fill={eActColor} fontFamily='monospace' fontWeight='bold'
+                                            >
+                                                {eAct}
+                                            </text>
+
+                                            {/* Ingress action dot */}
+                                            <circle cx={lo.ingressActionX + DOT_R} cy={band.y} r={DOT_R + 1}
+                                                fill={iActColor} stroke='rgba(255,255,255,0.4)' strokeWidth={1.5}
+                                            />
+                                            <text x={lo.ingressActionX + DOT_R * 2 + 6} y={band.y} dy='0.35em'
+                                                fontSize={8} fill={iActColor} fontFamily='monospace' fontWeight='bold'
+                                            >
+                                                {iAct}
+                                            </text>
+
+                                            {/* Protocol/port label near center */}
+                                            <text
+                                                x={width / 2 - 12} y={band.y} dy='0.35em'
+                                                textAnchor='middle'
+                                                fontSize={7} fill='#4A5568' fontFamily='monospace'
+                                            >
+                                                {band.lf.protocol}:{band.lf.destPort}
+                                            </text>
+                                        </g>
+                                    );
+                                })}
+                            </g>
+                        );
+                    })}
                 </svg>
 
                 {tooltipContent && (
                     <Box
-                        position='fixed'
-                        left={tooltipPos.x + 12}
-                        top={tooltipPos.y - 20}
-                        bg='gray.800'
-                        color='white'
-                        px={3}
-                        py={1}
-                        borderRadius='md'
-                        fontSize='xs'
-                        fontFamily='monospace'
-                        pointerEvents='none'
-                        zIndex={1000}
-                        whiteSpace='nowrap'
+                        position='fixed' left={tooltipPos.x + 14} top={tooltipPos.y - 24}
+                        bg='gray.900' color='white' px={3} py={1.5}
+                        borderRadius='lg' fontSize='xs' fontFamily='monospace'
+                        pointerEvents='none' zIndex={1000} whiteSpace='nowrap'
+                        border='1px solid' borderColor='gray.600' boxShadow='lg'
                     >
                         {tooltipContent}
                     </Box>
                 )}
             </Box>
 
-            {/* Selected flow detail */}
-            {selectedLogicalFlow && (
-                <Box
-                    bg='gray.800'
-                    borderRadius='lg'
-                    border='1px solid'
-                    borderColor='gray.600'
-                    mt={3}
-                    p={4}
-                >
+            {/* Detail panel */}
+            {selectedLF && (
+                <Box bg='gray.800' borderRadius='lg' border='1px solid' borderColor='gray.600' mt={3} p={4} mx='auto'>
                     <Flex justify='space-between' align='center' mb={3}>
                         <Box>
-                            <Text color='white' fontWeight='bold' fontSize='sm'>
-                                {selectedLogicalFlow.sourceNamespace}/
-                                {selectedLogicalFlow.sourceName}
-                                {' → '}
-                                {selectedLogicalFlow.destNamespace}/
-                                {selectedLogicalFlow.destName}
+                            <Text color='white' fontWeight='bold' fontSize='sm' fontFamily='monospace'>
+                                {selectedLF.sourceNamespace}/{selectedLF.sourceName} → {selectedLF.destNamespace}/{selectedLF.destName}
                             </Text>
-                            <Flex gap={4} mt={1} fontSize='xs' color='gray.400'>
-                                <Text>
-                                    {selectedLogicalFlow.protocol}:
-                                    {selectedLogicalFlow.destPort}
-                                </Text>
-                                <Text>
-                                    {formatValue(selectedLogicalFlow.volume, metric)}
-                                </Text>
-                                <Text
-                                    color={ACTION_COLORS[selectedLogicalFlow.action] || 'gray.400'}
-                                    fontWeight='bold'
-                                >
-                                    {selectedLogicalFlow.action}
+                            <Flex gap={4} mt={1} fontSize='xs' color='gray.400' fontFamily='monospace'>
+                                <Text>{selectedLF.protocol}:{selectedLF.destPort}</Text>
+                                <Text>{formatValue(selectedLF.volume, metric)}</Text>
+                                <Text color={ACTION_COLORS[selectedLF.action] || 'gray.400'} fontWeight='bold'>
+                                    {selectedLF.action}
                                 </Text>
                             </Flex>
                         </Box>
                         <Flex gap={3} align='center'>
                             {onFlowSelect && (
-                                <Text
-                                    color='blue.300'
-                                    fontSize='xs'
-                                    cursor='pointer'
-                                    onClick={() =>
-                                        onFlowSelect(
-                                            selectedLogicalFlow.sourceName,
-                                            selectedLogicalFlow.sourceNamespace,
-                                            selectedLogicalFlow.destName,
-                                            selectedLogicalFlow.destNamespace,
-                                        )
-                                    }
+                                <Text color='blue.300' fontSize='xs' cursor='pointer' fontFamily='monospace'
+                                    onClick={() => onFlowSelect(selectedLF.sourceName, selectedLF.sourceNamespace, selectedLF.destName, selectedLF.destNamespace)}
                                     _hover={{ color: 'blue.200' }}
                                 >
-                                    View in Topology →
+                                    Topology →
                                 </Text>
                             )}
-                            <Text
-                                color='gray.400'
-                                fontSize='xs'
-                                cursor='pointer'
-                                onClick={() => setSelectedFlow(null)}
-                                _hover={{ color: 'white' }}
-                            >
-                                ✕
-                            </Text>
+                            <Text color='gray.500' fontSize='xs' cursor='pointer' onClick={() => setSelectedFlow(null)} _hover={{ color: 'white' }}>✕</Text>
                         </Flex>
                     </Flex>
-
-                    <Flex gap={6}>
-                        <Box flex={1}>
-                            <Text fontSize='xs' color='gray.400' fontWeight='bold' mb={1}>
-                                EGRESS POLICIES (source-side)
-                            </Text>
-                            {selectedLogicalFlow.egressPolicies.length > 0 ? (
-                                <Table size='sm' variant='simple'>
-                                    <Tbody>
-                                        {selectedLogicalFlow.egressPolicies.map((p, i) => (
-                                            <Tr key={i}>
-                                                <Td color='gray.300' fontSize='xs' px={2} py={1}>
-                                                    {p.tier || 'profile'}
-                                                </Td>
-                                                <Td color='gray.200' fontSize='xs' px={2} py={1}>
-                                                    {p.name}
-                                                </Td>
-                                                <Td fontSize='xs' px={2} py={1}>
-                                                    <Text
-                                                        color={ACTION_COLORS[p.action] || 'gray.300'}
-                                                        fontWeight='bold'
-                                                    >
-                                                        {p.action}
-                                                    </Text>
-                                                </Td>
-                                            </Tr>
-                                        ))}
-                                    </Tbody>
-                                </Table>
-                            ) : (
-                                <Text color='gray.500' fontSize='xs'>No egress policy data</Text>
-                            )}
-                        </Box>
-                        <Box flex={1}>
-                            <Text fontSize='xs' color='gray.400' fontWeight='bold' mb={1}>
-                                INGRESS POLICIES (dest-side)
-                            </Text>
-                            {selectedLogicalFlow.ingressPolicies.length > 0 ? (
-                                <Table size='sm' variant='simple'>
-                                    <Tbody>
-                                        {selectedLogicalFlow.ingressPolicies.map((p, i) => (
-                                            <Tr key={i}>
-                                                <Td color='gray.300' fontSize='xs' px={2} py={1}>
-                                                    {p.tier || 'profile'}
-                                                </Td>
-                                                <Td color='gray.200' fontSize='xs' px={2} py={1}>
-                                                    {p.name}
-                                                </Td>
-                                                <Td fontSize='xs' px={2} py={1}>
-                                                    <Text
-                                                        color={ACTION_COLORS[p.action] || 'gray.300'}
-                                                        fontWeight='bold'
-                                                    >
-                                                        {p.action}
-                                                    </Text>
-                                                </Td>
-                                            </Tr>
-                                        ))}
-                                    </Tbody>
-                                </Table>
-                            ) : (
-                                <Text color='gray.500' fontSize='xs'>No ingress policy data</Text>
-                            )}
-                        </Box>
+                    <Flex gap={8}>
+                        <PolicyTable label='EGRESS' policies={selectedLF.egressPolicies} />
+                        <PolicyTable label='INGRESS' policies={selectedLF.ingressPolicies} />
                     </Flex>
                 </Box>
             )}
         </Box>
     );
 };
+
+// Helper functions for X positions
+const egressStart = (lo: { egressTierXs: Map<string, unknown>; egressActionX: number }) => {
+    const firstTier = [...lo.egressTierXs.keys()][0];
+    if (!firstTier) return lo.egressActionX - 20;
+    return 155;
+};
+
+const ingressStart = (lo: { ingressTierXs: Map<string, unknown> }) => {
+    const firstTier = [...lo.ingressTierXs.keys()][0];
+    if (!firstTier) return 0;
+    return (lo.ingressTierXs as Map<string, { tierX: number }>).get(firstTier)!.tierX - 10;
+};
+
+const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, policies }) => (
+    <Box flex={1}>
+        <Text fontSize='xs' color='gray.500' fontWeight='bold' mb={2} fontFamily='monospace'>{label}</Text>
+        {policies.length > 0 ? (
+            <Table size='sm' variant='unstyled'>
+                <Tbody>
+                    {policies.map((p, i) => (
+                        <Tr key={i}>
+                            <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.tier || 'profile'}</Td>
+                            <Td color='gray.300' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.name}</Td>
+                            <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
+                                <Text color={ACTION_COLORS[p.action] || 'gray.400'} fontWeight='bold'>{p.action}</Text>
+                            </Td>
+                        </Tr>
+                    ))}
+                </Tbody>
+            </Table>
+        ) : (
+            <Text color='gray.600' fontSize='xs' fontFamily='monospace'>—</Text>
+        )}
+    </Box>
+);
 
 export default DualSankeyDiagram;
