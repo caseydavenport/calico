@@ -848,8 +848,8 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
                 <Thead>
                     <Tr>
                         <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Kind</Th>
-                        <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Tier</Th>
-                        <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Policy</Th>
+                        <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Namespace</Th>
+                        <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Name</Th>
                         <Th color='gray.600' fontSize='10px' px={1} py={1} fontFamily='monospace' textTransform='none'>Action</Th>
                     </Tr>
                 </Thead>
@@ -879,7 +879,7 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
                             return [
                                 <Tr key={`${i}-trigger`}>
                                     <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{shortKind(trigger.kind)}</Td>
-                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{trigger.tier || tierName}</Td>
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{trigger.namespace}</Td>
                                     <Td color='gray.300' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{trigger.name}</Td>
                                     <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
                                         <Text color='gray.500' fontWeight='bold'>N/A</Text>
@@ -887,8 +887,8 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
                                 </Tr>,
                                 <Tr key={`${i}-eot`}>
                                     <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace' />
-                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{tierName}</Td>
-                                    <Td color='gray.400' fontSize='xs' px={1} py={0.5} fontFamily='monospace' fontStyle='italic'>End of Tier</Td>
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace' />
+                                    <Td color='gray.400' fontSize='xs' px={1} py={0.5} fontFamily='monospace' fontStyle='italic'>End of Tier {tierName}</Td>
                                     <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
                                         <Text color={defaultColor || 'gray.400'} fontWeight='bold'>{defaultAction}</Text>
                                     </Td>
@@ -899,7 +899,7 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
                         return [(
                             <Tr key={i}>
                                 <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{shortKind(p.kind)}</Td>
-                                <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.tier || 'profile'}</Td>
+                                <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.namespace}</Td>
                                 <Td color='gray.300' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.name}</Td>
                                 <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
                                     <Text color={ACTION_COLORS[p.action] || 'gray.400'} fontWeight='bold'>{p.action}</Text>
