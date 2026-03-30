@@ -64,12 +64,15 @@ const TopologyPage: React.FC = () => {
                     </Text>
                 </Box>
                 <Text fontSize='xs' color='gray.500'>
-                    {flows?.length || 0} flows |{' '}
-                    {new Set(
-                        flows?.map(
-                            (f) => `${f.source_namespace}/${f.source_name}`,
-                        ) || [],
-                    ).size}{' '}
+                    {flows?.length ?? 0} flows |{' '}
+                    {
+                        new Set(
+                            (flows ?? []).map(
+                                (f) =>
+                                    `${f.source_namespace}/${f.source_name}`,
+                            ),
+                        ).size
+                    }{' '}
                     sources
                 </Text>
             </Flex>

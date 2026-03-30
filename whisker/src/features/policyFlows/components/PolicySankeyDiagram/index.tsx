@@ -69,12 +69,13 @@ const PolicySankeyDiagram: React.FC<Props> = ({
     const [tooltipPos, setTooltipPos] = React.useState({ x: 0, y: 0 });
 
     const graph = React.useMemo(
-        () => buildSankeyGraph(flows, metric, showPending),
+        () => buildSankeyGraph(flows || [], metric, showPending),
         [flows, metric, showPending],
     );
 
     const sankeyData = React.useMemo(() => {
-        if (graph.nodes.length === 0 || graph.links.length === 0) return null;
+        if (!graph || graph.nodes.length === 0 || graph.links.length === 0)
+            return null;
 
         const nodeIndexMap = new Map<string, number>();
         graph.nodes.forEach((n, i) => nodeIndexMap.set(n.id, i));
@@ -99,7 +100,8 @@ const PolicySankeyDiagram: React.FC<Props> = ({
                 nodes: graph.nodes.map((n) => ({ ...n })),
                 links: validLinks.map((l) => ({ ...l })),
             });
-        } catch {
+        } catch (e) {
+            console.error('Sankey layout error:', e);
             return null;
         }
     }, [graph, width, height]);

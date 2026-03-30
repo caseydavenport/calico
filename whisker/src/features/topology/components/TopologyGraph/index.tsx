@@ -55,10 +55,14 @@ const TopologyGraph: React.FC<Props> = ({
     );
     const simulationRef = React.useRef<d3.Simulation<SimNode, SimEdge>>();
 
-    const graph = React.useMemo(() => buildTopologyGraph(flows), [flows]);
+    const graph = React.useMemo(
+        () => buildTopologyGraph(flows || []),
+        [flows],
+    );
 
     // Namespace color map
     const nsColors = React.useMemo(() => {
+        if (!graph || graph.nodes.length === 0) return new Map<string, string>();
         const namespaces = [...new Set(graph.nodes.map((n) => n.namespace))];
         const colorMap = new Map<string, string>();
         namespaces.forEach((ns, i) => {
@@ -69,7 +73,10 @@ const TopologyGraph: React.FC<Props> = ({
 
     // Max bytes for edge scaling
     const maxBytes = React.useMemo(
-        () => Math.max(...graph.edges.map((e) => e.bytes), 1),
+        () =>
+            graph && graph.edges.length > 0
+                ? Math.max(...graph.edges.map((e) => e.bytes), 1)
+                : 1,
         [graph],
     );
 
