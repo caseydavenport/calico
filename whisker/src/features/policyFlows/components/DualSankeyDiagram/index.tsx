@@ -74,6 +74,10 @@ const getOrderedTiers = (
             }
         }
     }
+    // Always show the "default" tier at the end (Profile evaluation)
+    if (!seen.has('default')) {
+        result.push('default');
+    }
     return result;
 };
 
@@ -452,7 +456,6 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     // - Default deny (trigger): continue through the policy to the next tier bar
                                     // - Allow/Pass: continue to the action badge
                                     const eSegs: { x1: number; x2: number }[] = [];
-                                    let eTermX = eBadgeLeft - 4;
                                     type VisiblePol = Policy & { isTrigger?: boolean };
                                     const eVisiblePols: VisiblePol[] = [];
                                     if (!srcExternal) {
@@ -476,9 +479,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 const tierC = lo.egressTierXs.get(t);
                                                 if (tierC) {
                                                     eSegs.push({ x1: ex, x2: tierC.tierX + TIER_W });
-                                                    eTermX = tierC.tierX + TIER_W + 2;
                                                 } else {
-                                                    eTermX = ex + 4;
                                                 }
                                                 terminated = true;
                                                 break;
@@ -491,7 +492,6 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                             eVisiblePols.push(p);
 
                                             if (p.action === 'Deny') {
-                                                eTermX = ex + 4;
                                                 terminated = true;
                                                 break;
                                             }
@@ -503,7 +503,6 @@ const DualSankeyDiagram: React.FC<Props> = ({
 
                                     // Build ingress segments — same logic
                                     const iSegs: { x1: number; x2: number }[] = [];
-                                    let iTermX = iBadgeLeft - 4;
                                     const iVisiblePols: VisiblePol[] = [];
                                     if (!dstExternal) {
                                         let ix = ingressStart(lo);
@@ -524,9 +523,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 const tierC = lo.ingressTierXs.get(t);
                                                 if (tierC) {
                                                     iSegs.push({ x1: ix, x2: tierC.tierX + TIER_W });
-                                                    iTermX = tierC.tierX + TIER_W + 2;
                                                 } else {
-                                                    iTermX = ix + 4;
                                                 }
                                                 terminated = true;
                                                 break;
@@ -539,7 +536,6 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                             iVisiblePols.push(p);
 
                                             if (p.action === 'Deny') {
-                                                iTermX = ix + 4;
                                                 terminated = true;
                                                 break;
                                             }
@@ -609,63 +605,10 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 />
                                             ))}
 
-                                            {/* Policy dots on egress — gray for trigger policies */}
-                                            {!srcExternal && eVisiblePols.map((p, pi) => {
-                                                const vp = p as VisiblePol;
-                                                const t = p.tier || '_profile_';
-                                                const c = lo.egressTierXs.get(t);
-                                                if (!c) return null;
-                                                const dotColor = vp.isTrigger ? '#718096' : (ACTION_COLORS[p.action] || POLICY_COLOR);
-                                                const label = vp.isTrigger ? `${p.name} (triggered)` : `${p.name} (${p.action})`;
-                                                return (
-                                                    <g key={`ed-${pi}`}
-                                                        onMouseEnter={(e) => {
-                                                            setTooltipContent(label);
-                                                            setTooltipPos({ x: e.clientX, y: e.clientY });
-                                                        }}
-                                                        onMouseLeave={() => setTooltipContent('')}
-                                                    >
-                                                        <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
-                                                            fill={dotColor}
-                                                            stroke='rgba(255,255,255,0.3)'
-                                                            strokeWidth={1}
-                                                        />
-                                                    </g>
-                                                );
-                                            })}
-
-                                            {/* Policy dots on ingress — gray for trigger policies */}
-                                            {!dstExternal && iVisiblePols.map((p, pi) => {
-                                                const vp = p as VisiblePol;
-                                                const t = p.tier || '_profile_';
-                                                const c = lo.ingressTierXs.get(t);
-                                                if (!c) return null;
-                                                const baseDotColor = vp.isTrigger ? '#718096' : (ACTION_COLORS[p.action] || POLICY_COLOR);
-                                                const dotColor = ingressDimmed ? '#4A5568' : baseDotColor;
-                                                const label = vp.isTrigger ? `${p.name} (triggered)` : `${p.name} (${p.action})`;
-                                                return (
-                                                    <g key={`id-${pi}`}
-                                                        opacity={ingressDotOpacity}
-                                                        onMouseEnter={(e) => {
-                                                            setTooltipContent(label);
-                                                            setTooltipPos({ x: e.clientX, y: e.clientY });
-                                                        }}
-                                                        onMouseLeave={() => setTooltipContent('')}
-                                                    >
-                                                        <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
-                                                            fill={dotColor}
-                                                            stroke={ingressDimmed ? '#4A5568' : 'rgba(255,255,255,0.3)'}
-                                                            strokeWidth={1}
-                                                        />
-                                                    </g>
-                                                );
-                                            })}
-
-                                            {/* Egress action badge: positioned at terminate point or standard position */}
-                                            {!srcExternal && (() => {
+                                            {/* Egress action badge — only for non-deny actions (denies are implicit from the line stopping) */}
+                                            {!srcExternal && eAct !== 'Deny' && eAct !== 'Default Deny' && (() => {
                                                 const badgeH = 18;
-                                                const egressTerminated = eAct === 'Deny' || eAct === 'Default Deny';
-                                                const bx = egressTerminated ? eTermX : eBadgeLeft;
+                                                const bx = eBadgeLeft;
                                                 const by = band.y - badgeH / 2;
                                                 return (
                                                     <g>
@@ -691,39 +634,86 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 );
                                             })()}
 
-                                            {/* Ingress action badge: positioned at terminate point or standard position */}
-                                            {!dstExternal && (() => {
+                                            {/* Ingress action badge — only for non-deny actions */}
+                                            {!dstExternal && !ingressDimmed && iAct !== 'Deny' && iAct !== 'Default Deny' && (() => {
                                                 const badgeH = 18;
-                                                const ingressTerminated = iAct === 'Deny' || iAct === 'Default Deny';
-                                                const bx = ingressTerminated && !ingressDimmed ? iTermX : iBadgeLeft;
+                                                const bx = iBadgeLeft;
                                                 const by = band.y - badgeH / 2;
-                                                const dimFill = ingressDimmed ? '#2D3748' : iActColor;
-                                                const dimTextFill = ingressDimmed ? '#4A5568' : '#1A202C';
                                                 return (
-                                                    <g opacity={ingressDotOpacity}>
+                                                    <g>
                                                         <rect
                                                             x={bx} y={by}
                                                             width={iBadgeW} height={badgeH}
                                                             rx={badgeH / 2}
-                                                            fill={dimFill}
+                                                            fill={iActColor}
                                                             opacity={0.9}
                                                         />
-                                                        {!ingressDimmed && (
-                                                            <text
-                                                                x={bx + iBadgeW / 2} y={band.y}
-                                                                dy='0.35em'
-                                                                textAnchor='middle'
-                                                                fontSize={10}
-                                                                fontWeight='bold'
-                                                                fill={dimTextFill}
-                                                                fontFamily='monospace'
-                                                            >
-                                                                {iAct}
-                                                            </text>
-                                                        )}
+                                                        <text
+                                                            x={bx + iBadgeW / 2} y={band.y}
+                                                            dy='0.35em'
+                                                            textAnchor='middle'
+                                                            fontSize={10}
+                                                            fontWeight='bold'
+                                                            fill='#1A202C'
+                                                            fontFamily='monospace'
+                                                        >
+                                                            {iAct}
+                                                        </text>
                                                     </g>
                                                 );
                                             })()}
+
+                                            {/* Policy dots on egress — rendered on top of badges */}
+                                            {!srcExternal && eVisiblePols.map((p, pi) => {
+                                                const vp = p as VisiblePol;
+                                                const t = p.tier || '_profile_';
+                                                const c = lo.egressTierXs.get(t);
+                                                if (!c) return null;
+                                                const dotColor = vp.isTrigger ? '#718096' : (ACTION_COLORS[p.action] || POLICY_COLOR);
+                                                const label = vp.isTrigger ? `${p.name} (triggered)` : `${p.name} (${p.action})`;
+                                                return (
+                                                    <g key={`ed-${pi}`}
+                                                        onMouseEnter={(e) => {
+                                                            setTooltipContent(label);
+                                                            setTooltipPos({ x: e.clientX, y: e.clientY });
+                                                        }}
+                                                        onMouseLeave={() => setTooltipContent('')}
+                                                    >
+                                                        <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
+                                                            fill={dotColor}
+                                                            stroke='rgba(255,255,255,0.3)'
+                                                            strokeWidth={1}
+                                                        />
+                                                    </g>
+                                                );
+                                            })}
+
+                                            {/* Policy dots on ingress — rendered on top of badges */}
+                                            {!dstExternal && iVisiblePols.map((p, pi) => {
+                                                const vp = p as VisiblePol;
+                                                const t = p.tier || '_profile_';
+                                                const c = lo.ingressTierXs.get(t);
+                                                if (!c) return null;
+                                                const baseDotColor = vp.isTrigger ? '#718096' : (ACTION_COLORS[p.action] || POLICY_COLOR);
+                                                const dotColor = ingressDimmed ? '#4A5568' : baseDotColor;
+                                                const label = vp.isTrigger ? `${p.name} (triggered)` : `${p.name} (${p.action})`;
+                                                return (
+                                                    <g key={`id-${pi}`}
+                                                        opacity={ingressDotOpacity}
+                                                        onMouseEnter={(e) => {
+                                                            setTooltipContent(label);
+                                                            setTooltipPos({ x: e.clientX, y: e.clientY });
+                                                        }}
+                                                        onMouseLeave={() => setTooltipContent('')}
+                                                    >
+                                                        <circle cx={c.polX + DOT_R} cy={band.y} r={DOT_R}
+                                                            fill={dotColor}
+                                                            stroke={ingressDimmed ? '#4A5568' : 'rgba(255,255,255,0.3)'}
+                                                            strokeWidth={1}
+                                                        />
+                                                    </g>
+                                                );
+                                            })}
 
                                             {/* Protocol/port label below the source label */}
                                             <text
