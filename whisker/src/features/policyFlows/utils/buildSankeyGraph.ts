@@ -61,7 +61,7 @@ export const buildSankeyGraph = (
 
         if (volume === 0) continue;
 
-        const policyKey = usePending ? 'pending_policies' : 'enforced_policies';
+        const policyKey = usePending ? 'pending' : 'enforced';
         const policies: Policy[] = flow.policies?.[policyKey] || [];
 
         if (policies.length === 0) {

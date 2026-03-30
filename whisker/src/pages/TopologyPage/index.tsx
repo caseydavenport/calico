@@ -1,10 +1,32 @@
 import React from 'react';
 import { Box, Flex, Heading, Text } from '@chakra-ui/react';
 import TopologyGraph from '@/features/topology/components/TopologyGraph';
-import { useFlowLogs } from '@/features/flowLogs/api';
+import api from '@/api';
+import { FlowLog as ApiFlowLog } from '@/types/api';
+import { FlowLog } from '@/types/render';
+import { useQuery } from '@tanstack/react-query';
+import { v4 as uuid } from 'uuid';
+
+type FlowsApiResponse = {
+    items: ApiFlowLog[];
+    total: { totalPages: number };
+};
+
+const useFlowsList = () =>
+    useQuery({
+        queryKey: ['flowsList'],
+        queryFn: () => api.get<FlowsApiResponse>('flows'),
+        select: (data): FlowLog[] =>
+            (data?.items || []).map((f) => ({
+                ...f,
+                id: uuid(),
+                start_time: new Date(f.start_time),
+                end_time: new Date(f.end_time),
+            })),
+    });
 
 const TopologyPage: React.FC = () => {
-    const { data: flows, isLoading } = useFlowLogs();
+    const { data: flows, isLoading } = useFlowsList();
     const [dimensions, setDimensions] = React.useState({
         width: 1200,
         height: 700,

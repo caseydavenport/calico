@@ -1,12 +1,34 @@
 import React from 'react';
 import { Box, Flex, Heading, Text, Button, ButtonGroup } from '@chakra-ui/react';
 import PolicySankeyDiagram from '@/features/policyFlows/components/PolicySankeyDiagram';
-import { useFlowLogs } from '@/features/flowLogs/api';
+import api from '@/api';
+import { FlowLog as ApiFlowLog } from '@/types/api';
+import { FlowLog } from '@/types/render';
+import { useQuery } from '@tanstack/react-query';
+import { v4 as uuid } from 'uuid';
+
+type FlowsApiResponse = {
+    items: ApiFlowLog[];
+    total: { totalPages: number };
+};
+
+const useFlowsList = () =>
+    useQuery({
+        queryKey: ['flowsList'],
+        queryFn: () => api.get<FlowsApiResponse>('flows'),
+        select: (data): FlowLog[] =>
+            (data?.items || []).map((f) => ({
+                ...f,
+                id: uuid(),
+                start_time: new Date(f.start_time),
+                end_time: new Date(f.end_time),
+            })),
+    });
 
 const PolicyFlowsPage: React.FC = () => {
     const [metric, setMetric] = React.useState<'bytes' | 'packets'>('bytes');
     const [showPending, setShowPending] = React.useState(false);
-    const { data: flows, isLoading } = useFlowLogs();
+    const { data: flows, isLoading } = useFlowsList();
 
     return (
         <Box p={4} h='100%'>
