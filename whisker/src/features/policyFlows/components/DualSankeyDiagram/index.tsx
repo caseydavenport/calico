@@ -131,6 +131,8 @@ type FullLayout = {
     srcX: number;
     egressTierXs: Map<string, { tierX: number; polX: number }>;
     egressActionX: number;
+    networkLeft: number;
+    networkRight: number;
     ingressTierXs: Map<string, { tierX: number; polX: number }>;
     ingressActionX: number;
     dstX: number;
@@ -140,11 +142,13 @@ const buildLayout = (connections: Connection[], width: number): FullLayout => {
     const eTiers = getOrderedTiers(connections, 'egress');
     const iTiers = getOrderedTiers(connections, 'ingress');
 
-    // X positions
+    // X positions — center gap is the "network" zone (60px wide)
     const srcX = 12;
     const eStart = 180;
-    const eActX = width / 2 - 110;
-    const iStart = width / 2 + 30;
+    const networkLeft = width / 2 - 30;
+    const networkRight = width / 2 + 30;
+    const eActX = networkLeft - ACTION_BADGE_MAX_W - 10;
+    const iStart = networkRight + 10;
     const iActX = width - 240;
     const dstX = width - 12;
 
@@ -236,6 +240,8 @@ const buildLayout = (connections: Connection[], width: number): FullLayout => {
         srcX,
         egressTierXs: eTierXs,
         egressActionX: eActX,
+        networkLeft,
+        networkRight,
         ingressTierXs: iTierXs,
         ingressActionX: iActX,
         dstX,
@@ -299,12 +305,34 @@ const DualSankeyDiagram: React.FC<Props> = ({
                     <text x={lo.srcX} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>SOURCE</text>
                     <text x={180} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>EGRESS POLICIES</text>
                     <text x={lo.egressActionX} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>ACTION</text>
-                    <text x={width / 2 + 40} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>INGRESS POLICIES</text>
+                    <text x={lo.networkRight + 15} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>INGRESS POLICIES</text>
                     <text x={lo.ingressActionX} y={22} fontSize={12} fill='#718096' fontWeight='bold' fontFamily='monospace'>ACTION</text>
                     <text x={lo.dstX} y={22} fontSize={12} fill='#718096' fontWeight='bold' textAnchor='end' fontFamily='monospace'>DEST</text>
                     <line x1={0} y1={34} x2={width} y2={34} stroke='#2D3748' strokeWidth={0.5} />
-                    {/* Center divider */}
-                    <line x1={width / 2 - 18} y1={38} x2={width / 2 - 18} y2={effectiveHeight} stroke='#2D3748' strokeDasharray='2,4' />
+
+                    {/* Network zone — the gap between egress and ingress */}
+                    <defs>
+                        <pattern id='network-pattern' patternUnits='userSpaceOnUse' width='8' height='8'>
+                            <path d='M0,8 L8,0' stroke='#2D3748' strokeWidth={0.5} />
+                        </pattern>
+                    </defs>
+                    <rect
+                        x={lo.networkLeft} y={TOP_MARGIN - 4}
+                        width={lo.networkRight - lo.networkLeft}
+                        height={effectiveHeight - TOP_MARGIN + 4}
+                        fill='url(#network-pattern)'
+                        opacity={0.5}
+                    />
+                    <line x1={lo.networkLeft} y1={TOP_MARGIN - 4} x2={lo.networkLeft} y2={effectiveHeight} stroke='#2D3748' strokeWidth={1} />
+                    <line x1={lo.networkRight} y1={TOP_MARGIN - 4} x2={lo.networkRight} y2={effectiveHeight} stroke='#2D3748' strokeWidth={1} />
+                    <text
+                        x={width / 2} y={TOP_MARGIN + 6}
+                        textAnchor='middle'
+                        fontSize={9} fill='#4A5568' fontFamily='monospace'
+                        letterSpacing='2px'
+                    >
+                        NETWORK
+                    </text>
 
                     {/* Tier bars with rotated labels inside */}
                     {[...lo.egressTierBars, ...lo.ingressTierBars].map((tb) => {
@@ -390,7 +418,11 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                 {cl.bands.map((band) => {
                                     const bandActive = isBandActive(band.flowId);
                                     const color = ACTION_COLORS[band.action] || '#718096';
-                                    const w = 2 + (band.volume / maxVol) * 4;
+                                    // Use log scale so small flows are still visible
+                                    // but high-volume flows are noticeably thicker.
+                                    const logVol = Math.log(band.volume + 1);
+                                    const logMax = Math.log(maxVol + 1);
+                                    const w = 3 + (logVol / logMax) * 11;
 
                                     const srcExternal = band.lf.sourceName === 'PRIVATE NETWORK' || band.lf.sourceNamespace === '-';
                                     const dstExternal = band.lf.destName === 'PRIVATE NETWORK' || band.lf.destNamespace === '-';
@@ -451,6 +483,15 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 selectedFlow === band.flowId ? null : band.flowId,
                                             )}
                                         >
+                                            {/* Invisible hit area spanning the full lane width for easy clicking */}
+                                            <rect
+                                                x={lo.srcX}
+                                                y={band.y - CONN_H / 2}
+                                                width={lo.dstX - lo.srcX}
+                                                height={CONN_H}
+                                                fill='transparent'
+                                            />
+
                                             {/* Egress flow lines (hidden for external sources) */}
                                             {!srcExternal && eSegs.map((s, si) => (
                                                 <path
@@ -479,7 +520,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                     d={curvedLink(s.x1, band.y, s.x2, band.y)}
                                                     fill='none'
                                                     stroke={ingressDimmed ? '#2D3748' : color}
-                                                    strokeWidth={ingressDimmed ? 1 : w}
+                                                    strokeWidth={ingressDimmed ? 2 : w}
                                                     strokeOpacity={ingressOpacity}
                                                     strokeLinecap='round'
                                                     strokeDasharray={ingressDimmed ? '2,3' : undefined}
@@ -709,34 +750,57 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
         {policies.length > 0 ? (
             <Table size='sm' variant='unstyled'>
                 <Tbody>
-                    {policies.map((p, i) => {
+                    {policies.flatMap((p, i) => {
                         const isKnsProfile = p.kind === 'Profile' && p.name.startsWith('kns.');
                         const isEndOfTier = !!p.trigger;
-                        const displayTier = isKnsProfile ? '' : (p.tier || 'profile');
-                        const displayName = isKnsProfile
-                            ? 'Default Allow'
-                            : isEndOfTier
-                              ? `End of Tier ${p.tier || 'default'}`
-                              : p.name;
-                        const displayAction = isKnsProfile
-                            ? 'Allow'
-                            : isEndOfTier && p.action === 'Deny'
-                              ? 'Default Deny'
-                              : p.action;
-                        const actionColor = isKnsProfile
-                            ? ACTION_COLORS['Default Allow']
-                            : isEndOfTier && p.action === 'Deny'
-                              ? ACTION_COLORS['Default Deny']
-                              : ACTION_COLORS[p.action];
-                        return (
+
+                        if (isKnsProfile) {
+                            return [(
+                                <Tr key={i}>
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace' />
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace' fontStyle='italic'>Default Allow</Td>
+                                    <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
+                                        <Text color={ACTION_COLORS['Default Allow']} fontWeight='bold'>Allow</Text>
+                                    </Td>
+                                </Tr>
+                            )];
+                        }
+
+                        if (isEndOfTier) {
+                            const trigger = p.trigger as Policy;
+                            const tierName = p.tier || 'default';
+                            const defaultAction = p.action === 'Deny' ? 'Default Deny' : p.action;
+                            const defaultColor = p.action === 'Deny' ? ACTION_COLORS['Default Deny'] : ACTION_COLORS[p.action];
+                            return [
+                                // Row 1: the trigger policy with N/A action
+                                <Tr key={`${i}-trigger`}>
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{trigger.tier || tierName}</Td>
+                                    <Td color='gray.300' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{trigger.name}</Td>
+                                    <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
+                                        <Text color='gray.500' fontWeight='bold'>N/A</Text>
+                                    </Td>
+                                </Tr>,
+                                // Row 2: end-of-tier default action
+                                <Tr key={`${i}-eot`}>
+                                    <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{tierName}</Td>
+                                    <Td color='gray.400' fontSize='xs' px={1} py={0.5} fontFamily='monospace' fontStyle='italic'>End of Tier</Td>
+                                    <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
+                                        <Text color={defaultColor || 'gray.400'} fontWeight='bold'>{defaultAction}</Text>
+                                    </Td>
+                                </Tr>,
+                            ];
+                        }
+
+                        // Regular policy
+                        return [(
                             <Tr key={i}>
-                                <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{displayTier}</Td>
-                                <Td color={isKnsProfile ? 'gray.500' : 'gray.300'} fontSize='xs' px={1} py={0.5} fontFamily='monospace' fontStyle={isKnsProfile ? 'italic' : undefined}>{displayName}</Td>
+                                <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.tier || 'profile'}</Td>
+                                <Td color='gray.300' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.name}</Td>
                                 <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
-                                    <Text color={actionColor || 'gray.400'} fontWeight='bold'>{displayAction}</Text>
+                                    <Text color={ACTION_COLORS[p.action] || 'gray.400'} fontWeight='bold'>{p.action}</Text>
                                 </Td>
                             </Tr>
-                        );
+                        )];
                     })}
                 </Tbody>
             </Table>
