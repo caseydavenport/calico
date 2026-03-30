@@ -403,7 +403,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                 >
                                     {cleanName(cl.conn.sourceName)}
                                 </text>
-                                {cl.conn.flows.length > 1 && (
+                                {(
                                     <text
                                         x={lo.srcX} y={cl.srcLabelY + 12} fontSize={11} fill='#718096' fontFamily='monospace'
                                     >
@@ -419,7 +419,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                 >
                                     {cleanName(cl.conn.destName)}
                                 </text>
-                                {cl.conn.flows.length > 1 && (
+                                {(
                                     <text
                                         x={lo.dstX} y={cl.dstLabelY + 12}
                                         textAnchor='end' fontSize={11} fill='#718096' fontFamily='monospace'
