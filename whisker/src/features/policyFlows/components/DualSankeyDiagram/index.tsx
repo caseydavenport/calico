@@ -155,13 +155,13 @@ const buildLayout = (connections: Connection[], width: number): FullLayout => {
     const eSlot = eTiers.length > 0 ? (eActX - eStart - 30) / eTiers.length : 0;
     const eTierXs = new Map<string, { tierX: number; polX: number }>();
     eTiers.forEach((t, i) =>
-        eTierXs.set(t, { tierX: eStart + i * eSlot, polX: eStart + i * eSlot + TIER_W + 4 }),
+        eTierXs.set(t, { tierX: eStart + i * eSlot, polX: eStart + i * eSlot + TIER_W / 2 - DOT_R }),
     );
 
     const iSlot = iTiers.length > 0 ? (iActX - iStart - 30) / iTiers.length : 0;
     const iTierXs = new Map<string, { tierX: number; polX: number }>();
     iTiers.forEach((t, i) =>
-        iTierXs.set(t, { tierX: iStart + i * iSlot, polX: iStart + i * iSlot + TIER_W + 4 }),
+        iTierXs.set(t, { tierX: iStart + i * iSlot, polX: iStart + i * iSlot + TIER_W / 2 - DOT_R }),
     );
 
     // Per-tier Y extents for bar spanning
@@ -437,34 +437,91 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     const eBadgeLeft = lo.egressActionX + ACTION_BADGE_MAX_W - eBadgeW;
                                     const iBadgeLeft = lo.ingressActionX + ACTION_BADGE_MAX_W - iBadgeW;
 
-                                    // Build egress segments — lines stop at badge left edge
+                                    // Build egress segments.
+                                    // - Explicit deny: stop at the denying policy dot
+                                    // - Default deny (trigger): continue through the policy to the next tier bar
+                                    // - Allow/Pass: continue to the action badge
                                     const eSegs: { x1: number; x2: number }[] = [];
+                                    let eTermX = eBadgeLeft - 4;
+                                    const eVisiblePols: typeof band.egressPols = [];
                                     if (!srcExternal) {
                                         let ex = egressStart(lo);
-                                        for (const p of band.egressPols) {
+                                        let terminated = false;
+                                        for (let pi = 0; pi < band.egressPols.length; pi++) {
+                                            const p = band.egressPols[pi];
                                             const t = p.tier || '_profile_';
-                                            if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+                                            if (t === '_profile_' || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+
+                                            if (p.trigger) {
+                                                // Default deny: the trigger policy already rendered as the last
+                                                // visible policy. Extend line to the trigger's tier bar right edge.
+                                                const c = lo.egressTierXs.get(t);
+                                                if (c) {
+                                                    eSegs.push({ x1: ex, x2: c.tierX + TIER_W });
+                                                    eTermX = c.tierX + TIER_W + 6;
+                                                } else {
+                                                    eTermX = ex + 4;
+                                                }
+                                                terminated = true;
+                                                break;
+                                            }
+
                                             const c = lo.egressTierXs.get(t);
                                             if (!c) continue;
                                             eSegs.push({ x1: ex, x2: c.polX });
                                             ex = c.polX + DOT_R * 2 + 2;
+                                            eVisiblePols.push(p);
+
+                                            if (p.action === 'Deny') {
+                                                eTermX = ex + 4;
+                                                terminated = true;
+                                                break;
+                                            }
                                         }
-                                        eSegs.push({ x1: ex, x2: eBadgeLeft - 4 });
+                                        if (!terminated) {
+                                            eSegs.push({ x1: ex, x2: eBadgeLeft - 4 });
+                                        }
                                     }
 
-                                    // Build ingress segments — lines start from ingress action badge right edge
+                                    // Build ingress segments — same logic
                                     const iSegs: { x1: number; x2: number }[] = [];
+                                    let iTermX = iBadgeLeft - 4;
+                                    const iVisiblePols: typeof band.ingressPols = [];
                                     if (!dstExternal) {
                                         let ix = ingressStart(lo);
-                                        for (const p of band.ingressPols) {
+                                        let terminated = false;
+                                        for (let pi = 0; pi < band.ingressPols.length; pi++) {
+                                            const p = band.ingressPols[pi];
                                             const t = p.tier || '_profile_';
-                                            if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+                                            if (t === '_profile_' || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) continue;
+
+                                            if (p.trigger) {
+                                                const c = lo.ingressTierXs.get(t);
+                                                if (c) {
+                                                    iSegs.push({ x1: ix, x2: c.tierX + TIER_W });
+                                                    iTermX = c.tierX + TIER_W + 6;
+                                                } else {
+                                                    iTermX = ix + 4;
+                                                }
+                                                terminated = true;
+                                                break;
+                                            }
+
                                             const c = lo.ingressTierXs.get(t);
                                             if (!c) continue;
                                             iSegs.push({ x1: ix, x2: c.polX });
                                             ix = c.polX + DOT_R * 2 + 2;
+                                            iVisiblePols.push(p);
+
+                                            if (p.action === 'Deny') {
+                                                iTermX = ix + 4;
+                                                terminated = true;
+                                                break;
+                                            }
                                         }
-                                        iSegs.push({ x1: ix, x2: iBadgeLeft - 4 });
+                                        if (!terminated) {
+                                            iSegs.push({ x1: ix, x2: iBadgeLeft - 4 });
+                                        }
                                     }
 
                                     // If egress denies, traffic never reaches ingress
@@ -503,13 +560,13 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 />
                                             ))}
 
-                                            {/* Bridge: show when traffic crosses (not denied, not external-only) */}
+                                            {/* Bridge across network zone: gray to show it's outside policy control */}
                                             {!egressDenied && !srcExternal && !dstExternal && (
                                                 <path
                                                     d={curvedLink(eBadgeLeft + eBadgeW + 4, band.y, iBadgeLeft - 4, band.y)}
-                                                    fill='none' stroke={color}
-                                                    strokeWidth={w * 0.7} strokeOpacity={0.3}
-                                                    strokeDasharray='3,3' strokeLinecap='round'
+                                                    fill='none' stroke='#4A5568'
+                                                    strokeWidth={w * 0.6} strokeOpacity={0.4}
+                                                    strokeDasharray='4,3' strokeLinecap='round'
                                                 />
                                             )}
 
@@ -527,10 +584,9 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 />
                                             ))}
 
-                                            {/* Policy rings on egress (open circles = pass-through) */}
-                                            {!srcExternal && band.egressPols.map((p, pi) => {
+                                            {/* Policy rings on egress — only for visible (non-terminated) policies */}
+                                            {!srcExternal && eVisiblePols.map((p, pi) => {
                                                 const t = p.tier || '_profile_';
-                                                if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) return null;
                                                 const c = lo.egressTierXs.get(t);
                                                 if (!c) return null;
                                                 const ringColor = ACTION_COLORS[p.action] || POLICY_COLOR;
@@ -551,10 +607,9 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 );
                                             })}
 
-                                            {/* Policy rings on ingress: hidden for external dests, dimmed if egress denied */}
-                                            {!dstExternal && band.ingressPols.map((p, pi) => {
+                                            {/* Policy rings on ingress — only visible (non-terminated) policies */}
+                                            {!dstExternal && iVisiblePols.map((p, pi) => {
                                                 const t = p.tier || '_profile_';
-                                                if (t === '_profile_' || p.trigger || (p.kind === 'Profile' && p.name?.startsWith('kns.'))) return null;
                                                 const c = lo.ingressTierXs.get(t);
                                                 if (!c) return null;
                                                 const ringColor = ingressDimmed ? '#4A5568' : (ACTION_COLORS[p.action] || POLICY_COLOR);
@@ -576,10 +631,11 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 );
                                             })}
 
-                                            {/* Egress action badge: right-aligned, hidden for external sources */}
+                                            {/* Egress action badge: positioned at terminate point or standard position */}
                                             {!srcExternal && (() => {
                                                 const badgeH = 18;
-                                                const bx = eBadgeLeft;
+                                                const egressTerminated = eAct === 'Deny' || eAct === 'Default Deny';
+                                                const bx = egressTerminated ? eTermX : eBadgeLeft;
                                                 const by = band.y - badgeH / 2;
                                                 return (
                                                     <g>
@@ -605,10 +661,11 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 );
                                             })()}
 
-                                            {/* Ingress action badge: right-aligned, hidden for external dests, dimmed if egress denied */}
+                                            {/* Ingress action badge: positioned at terminate point or standard position */}
                                             {!dstExternal && (() => {
                                                 const badgeH = 18;
-                                                const bx = iBadgeLeft;
+                                                const ingressTerminated = iAct === 'Deny' || iAct === 'Default Deny';
+                                                const bx = ingressTerminated && !ingressDimmed ? iTermX : iBadgeLeft;
                                                 const by = band.y - badgeH / 2;
                                                 const dimFill = ingressDimmed ? '#2D3748' : iActColor;
                                                 const dimTextFill = ingressDimmed ? '#4A5568' : '#1A202C';
@@ -638,10 +695,9 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 );
                                             })()}
 
-                                            {/* Protocol/port label below the flow line */}
+                                            {/* Protocol/port label below the source label */}
                                             <text
-                                                x={width / 2 - 18} y={band.y + 12}
-                                                textAnchor='middle'
+                                                x={lo.srcX} y={band.y + 14}
                                                 fontSize={9} fill='#4A5568' fontFamily='monospace'
                                             >
                                                 {band.lf.protocol}:{band.lf.destPort}
