@@ -47,7 +47,7 @@ const CONN_H = 38;         // Height per flow sub-band within a connection
 const CONN_GAP = 6;        // Gap between sub-bands in a connection
 const CONN_MARGIN = 22;    // Gap between connections
 const TIER_W = 22;
-const DOT_R = 7;
+const DOT_R = 9;
 const TOP_MARGIN = 48;
 const ACTION_BADGE_MAX_W = 110; // right-alignment zone width for action badges
 
@@ -475,11 +475,17 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                     ex = c.polX + DOT_R * 2 + 2;
                                                     eVisiblePols.push({ ...trigger, isTrigger: true });
                                                 }
-                                                // Extend line to tier bar right edge
-                                                const tierC = lo.egressTierXs.get(t);
-                                                if (tierC) {
-                                                    eSegs.push({ x1: ex, x2: tierC.tierX + TIER_W });
+                                                // Extend line to the NEXT tier bar's left edge
+                                                const eTiers = [...lo.egressTierXs.keys()];
+                                                const tierIdx = eTiers.indexOf(t);
+                                                const nextTier = tierIdx >= 0 && tierIdx < eTiers.length - 1
+                                                    ? lo.egressTierXs.get(eTiers[tierIdx + 1])
+                                                    : null;
+                                                if (nextTier) {
+                                                    eSegs.push({ x1: ex, x2: nextTier.tierX });
                                                 } else {
+                                                    // Last tier — extend to action badge zone
+                                                    eSegs.push({ x1: ex, x2: eBadgeLeft - 4 });
                                                 }
                                                 terminated = true;
                                                 break;
@@ -520,10 +526,16 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                     ix = trigC.polX + DOT_R * 2 + 2;
                                                     iVisiblePols.push({ ...trigger, isTrigger: true });
                                                 }
-                                                const tierC = lo.ingressTierXs.get(t);
-                                                if (tierC) {
-                                                    iSegs.push({ x1: ix, x2: tierC.tierX + TIER_W });
+                                                // Extend to the NEXT tier bar's left edge
+                                                const iTiers = [...lo.ingressTierXs.keys()];
+                                                const tierIdx = iTiers.indexOf(t);
+                                                const nextTier = tierIdx >= 0 && tierIdx < iTiers.length - 1
+                                                    ? lo.ingressTierXs.get(iTiers[tierIdx + 1])
+                                                    : null;
+                                                if (nextTier) {
+                                                    iSegs.push({ x1: ix, x2: nextTier.tierX });
                                                 } else {
+                                                    iSegs.push({ x1: ix, x2: iBadgeLeft - 4 });
                                                 }
                                                 terminated = true;
                                                 break;
