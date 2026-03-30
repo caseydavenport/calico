@@ -21,6 +21,7 @@ const ACTION_COLORS: Record<string, string> = {
     Allow: '#38A169',
     'Default Allow': '#68D391',
     Deny: '#E53E3E',
+    'Default Deny': '#FC8181',
     Pass: '#3182CE',
     Log: '#D69E2E',
 };
@@ -78,7 +79,9 @@ const getOrderedTiers = (
 const getAction = (pols: Policy[], flowAction: string): string => {
     if (pols.length === 0) return flowAction;
     const last = pols[pols.length - 1];
-    if (last.trigger) return last.action;
+    if (last.trigger) {
+        return last.action === 'Deny' ? 'Default Deny' : last.action;
+    }
     if (last.kind === 'Profile' && last.name?.startsWith('kns.')) return 'Default Allow';
     return last.action;
 };
@@ -301,24 +304,33 @@ const DualSankeyDiagram: React.FC<Props> = ({
                     {/* Center divider */}
                     <line x1={width / 2 - 12} y1={28} x2={width / 2 - 12} y2={effectiveHeight} stroke='#2D3748' strokeDasharray='2,4' />
 
-                    {/* Tier bars */}
-                    {[...lo.egressTierBars, ...lo.ingressTierBars].map((tb) => (
-                        <g key={`tb-${tb.side}-${tb.tier}`}>
-                            <rect
-                                x={tb.x} y={tb.y} width={TIER_W} height={tb.h}
-                                fill={TIER_COLOR} stroke='#718096' strokeWidth={0.5} rx={3}
-                                opacity={0.7}
-                            />
-                            <text
-                                x={tb.side === 'egress' ? tb.x - 4 : tb.x + TIER_W + 4}
-                                y={tb.y + tb.h / 2} dy='0.35em'
-                                textAnchor={tb.side === 'egress' ? 'end' : 'start'}
-                                fontSize={9} fontWeight='bold' fill='#A0AEC0' fontFamily='monospace'
-                            >
-                                {tb.tier}
-                            </text>
-                        </g>
-                    ))}
+                    {/* Tier bars with rotated labels inside */}
+                    {[...lo.egressTierBars, ...lo.ingressTierBars].map((tb) => {
+                        const cx = tb.x + TIER_W / 2;
+                        const cy = tb.y + tb.h / 2;
+                        return (
+                            <g key={`tb-${tb.side}-${tb.tier}`}>
+                                <rect
+                                    x={tb.x} y={tb.y} width={TIER_W} height={tb.h}
+                                    fill={TIER_COLOR} stroke='#718096' strokeWidth={0.5} rx={3}
+                                    opacity={0.8}
+                                />
+                                <text
+                                    x={cx} y={cy}
+                                    textAnchor='middle'
+                                    dominantBaseline='central'
+                                    transform={`rotate(-90, ${cx}, ${cy})`}
+                                    fontSize={9}
+                                    fontWeight='bold'
+                                    fill='#CBD5E0'
+                                    fontFamily='monospace'
+                                    letterSpacing='0.5px'
+                                >
+                                    {tb.tier.toUpperCase()}
+                                </text>
+                            </g>
+                        );
+                    })}
 
                     {/* Connections */}
                     {lo.conns.map((cl) => {
@@ -410,7 +422,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     const iActColor = ACTION_COLORS[iAct] || '#718096';
 
                                     // If egress denies, traffic never reaches ingress
-                                    const egressDenied = eAct === 'Deny';
+                                    const egressDenied = eAct === 'Deny' || eAct === 'Default Deny';
                                     // Ingress side is grayed out if egress denied
                                     const ingressDimmed = egressDenied;
                                     const ingressOpacity = ingressDimmed ? 0.12 : 0.6;
@@ -617,15 +629,35 @@ const PolicyTable: React.FC<{ label: string; policies: Policy[] }> = ({ label, p
         {policies.length > 0 ? (
             <Table size='sm' variant='unstyled'>
                 <Tbody>
-                    {policies.map((p, i) => (
-                        <Tr key={i}>
-                            <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.tier || 'profile'}</Td>
-                            <Td color='gray.300' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{p.name}</Td>
-                            <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
-                                <Text color={ACTION_COLORS[p.action] || 'gray.400'} fontWeight='bold'>{p.action}</Text>
-                            </Td>
-                        </Tr>
-                    ))}
+                    {policies.map((p, i) => {
+                        const isKnsProfile = p.kind === 'Profile' && p.name.startsWith('kns.');
+                        const isEndOfTier = !!p.trigger;
+                        const displayTier = isKnsProfile ? '' : (p.tier || 'profile');
+                        const displayName = isKnsProfile
+                            ? 'Default Allow'
+                            : isEndOfTier
+                              ? `End of Tier ${p.tier || 'default'}`
+                              : p.name;
+                        const displayAction = isKnsProfile
+                            ? 'Allow'
+                            : isEndOfTier && p.action === 'Deny'
+                              ? 'Default Deny'
+                              : p.action;
+                        const actionColor = isKnsProfile
+                            ? ACTION_COLORS['Default Allow']
+                            : isEndOfTier && p.action === 'Deny'
+                              ? ACTION_COLORS['Default Deny']
+                              : ACTION_COLORS[p.action];
+                        return (
+                            <Tr key={i}>
+                                <Td color='gray.500' fontSize='xs' px={1} py={0.5} fontFamily='monospace'>{displayTier}</Td>
+                                <Td color={isKnsProfile ? 'gray.500' : 'gray.300'} fontSize='xs' px={1} py={0.5} fontFamily='monospace' fontStyle={isKnsProfile ? 'italic' : undefined}>{displayName}</Td>
+                                <Td fontSize='xs' px={1} py={0.5} fontFamily='monospace'>
+                                    <Text color={actionColor || 'gray.400'} fontWeight='bold'>{displayAction}</Text>
+                                </Td>
+                            </Tr>
+                        );
+                    })}
                 </Tbody>
             </Table>
         ) : (
