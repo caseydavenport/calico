@@ -49,6 +49,7 @@ const CONN_MARGIN = 22;    // Gap between connections
 const TIER_W = 22;
 const DOT_R = 7;
 const TOP_MARGIN = 48;
+const ACTION_BADGE_MAX_W = 110; // right-alignment zone width for action badges
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -142,9 +143,9 @@ const buildLayout = (connections: Connection[], width: number): FullLayout => {
     // X positions
     const srcX = 12;
     const eStart = 180;
-    const eActX = width / 2 - 80;
-    const iStart = width / 2 + 40;
-    const iActX = width - 220;
+    const eActX = width / 2 - 110;
+    const iStart = width / 2 + 30;
+    const iActX = width - 240;
     const dstX = width - 12;
 
     const eSlot = eTiers.length > 0 ? (eActX - eStart - 30) / eTiers.length : 0;
@@ -391,12 +392,20 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                     const color = ACTION_COLORS[band.action] || '#718096';
                                     const w = 2 + (band.volume / maxVol) * 4;
 
-                                    // External sources have no egress policies;
-                                    // external destinations have no ingress policies.
                                     const srcExternal = band.lf.sourceName === 'PRIVATE NETWORK' || band.lf.sourceNamespace === '-';
                                     const dstExternal = band.lf.destName === 'PRIVATE NETWORK' || band.lf.destNamespace === '-';
 
-                                    // Build link segments for egress side
+                                    // Compute actions first (needed for badge sizing)
+                                    const eAct = getAction(band.egressPols, band.action);
+                                    const iAct = getAction(band.ingressPols, band.action);
+                                    const eActColor = ACTION_COLORS[eAct] || '#718096';
+                                    const iActColor = ACTION_COLORS[iAct] || '#718096';
+                                    const eBadgeW = eAct.length * 7.5 + 14;
+                                    const iBadgeW = iAct.length * 7.5 + 14;
+                                    const eBadgeLeft = lo.egressActionX + ACTION_BADGE_MAX_W - eBadgeW;
+                                    const iBadgeLeft = lo.ingressActionX + ACTION_BADGE_MAX_W - iBadgeW;
+
+                                    // Build egress segments — lines stop at badge left edge
                                     const eSegs: { x1: number; x2: number }[] = [];
                                     if (!srcExternal) {
                                         let ex = egressStart(lo);
@@ -408,10 +417,10 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                             eSegs.push({ x1: ex, x2: c.polX });
                                             ex = c.polX + DOT_R * 2 + 2;
                                         }
-                                        eSegs.push({ x1: ex, x2: lo.egressActionX });
+                                        eSegs.push({ x1: ex, x2: eBadgeLeft - 4 });
                                     }
 
-                                    // Ingress side
+                                    // Build ingress segments — lines start from ingress action badge right edge
                                     const iSegs: { x1: number; x2: number }[] = [];
                                     if (!dstExternal) {
                                         let ix = ingressStart(lo);
@@ -423,13 +432,8 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                             iSegs.push({ x1: ix, x2: c.polX });
                                             ix = c.polX + DOT_R * 2 + 2;
                                         }
-                                        iSegs.push({ x1: ix, x2: lo.ingressActionX });
+                                        iSegs.push({ x1: ix, x2: iBadgeLeft - 4 });
                                     }
-
-                                    const eAct = getAction(band.egressPols, band.action);
-                                    const iAct = getAction(band.ingressPols, band.action);
-                                    const eActColor = ACTION_COLORS[eAct] || '#718096';
-                                    const iActColor = ACTION_COLORS[iAct] || '#718096';
 
                                     // If egress denies, traffic never reaches ingress
                                     const egressDenied = eAct === 'Deny' || eAct === 'Default Deny';
@@ -461,7 +465,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                             {/* Bridge: show when traffic crosses (not denied, not external-only) */}
                                             {!egressDenied && !srcExternal && !dstExternal && (
                                                 <path
-                                                    d={curvedLink(lo.egressActionX + DOT_R * 2 + 2, band.y, ingressStart(lo) - 4, band.y)}
+                                                    d={curvedLink(eBadgeLeft + eBadgeW + 4, band.y, iBadgeLeft - 4, band.y)}
                                                     fill='none' stroke={color}
                                                     strokeWidth={w * 0.7} strokeOpacity={0.3}
                                                     strokeDasharray='3,3' strokeLinecap='round'
@@ -533,23 +537,20 @@ const DualSankeyDiagram: React.FC<Props> = ({
 
                                             {/* Egress action badge: right-aligned, hidden for external sources */}
                                             {!srcExternal && (() => {
-                                                const badgeW = eAct.length * 7.5 + 14;
                                                 const badgeH = 18;
-                                                // Right-align: right edge at egressActionX + fixed width
-                                                const badgeRight = lo.egressActionX + 100;
-                                                const bx = badgeRight - badgeW;
+                                                const bx = eBadgeLeft;
                                                 const by = band.y - badgeH / 2;
                                                 return (
                                                     <g>
                                                         <rect
                                                             x={bx} y={by}
-                                                            width={badgeW} height={badgeH}
+                                                            width={eBadgeW} height={badgeH}
                                                             rx={badgeH / 2}
                                                             fill={eActColor}
                                                             opacity={0.9}
                                                         />
                                                         <text
-                                                            x={bx + badgeW / 2} y={band.y}
+                                                            x={bx + eBadgeW / 2} y={band.y}
                                                             dy='0.35em'
                                                             textAnchor='middle'
                                                             fontSize={10}
@@ -565,10 +566,8 @@ const DualSankeyDiagram: React.FC<Props> = ({
 
                                             {/* Ingress action badge: right-aligned, hidden for external dests, dimmed if egress denied */}
                                             {!dstExternal && (() => {
-                                                const badgeW = iAct.length * 7.5 + 14;
                                                 const badgeH = 18;
-                                                const badgeRight = lo.ingressActionX + 100;
-                                                const bx = badgeRight - badgeW;
+                                                const bx = iBadgeLeft;
                                                 const by = band.y - badgeH / 2;
                                                 const dimFill = ingressDimmed ? '#2D3748' : iActColor;
                                                 const dimTextFill = ingressDimmed ? '#4A5568' : '#1A202C';
@@ -576,14 +575,14 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                     <g opacity={ingressDotOpacity}>
                                                         <rect
                                                             x={bx} y={by}
-                                                            width={badgeW} height={badgeH}
+                                                            width={iBadgeW} height={badgeH}
                                                             rx={badgeH / 2}
                                                             fill={dimFill}
                                                             opacity={0.9}
                                                         />
                                                         {!ingressDimmed && (
                                                             <text
-                                                                x={bx + badgeW / 2} y={band.y}
+                                                                x={bx + iBadgeW / 2} y={band.y}
                                                                 dy='0.35em'
                                                                 textAnchor='middle'
                                                                 fontSize={10}
@@ -598,11 +597,11 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 );
                                             })()}
 
-                                            {/* Protocol/port label near center */}
+                                            {/* Protocol/port label below the flow line */}
                                             <text
-                                                x={width / 2 - 18} y={band.y} dy='0.35em'
+                                                x={width / 2 - 18} y={band.y + 12}
                                                 textAnchor='middle'
-                                                fontSize={10} fill='#4A5568' fontFamily='monospace'
+                                                fontSize={9} fill='#4A5568' fontFamily='monospace'
                                             >
                                                 {band.lf.protocol}:{band.lf.destPort}
                                             </text>
