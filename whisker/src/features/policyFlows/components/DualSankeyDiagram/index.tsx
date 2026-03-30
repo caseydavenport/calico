@@ -753,7 +753,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
             <AnimatePresence>
                 {selectedLF && (
                     <MotionBox
-                        position='absolute'
+                        position='fixed'
                         bottom={0}
                         left={0}
                         right={0}
@@ -761,12 +761,14 @@ const DualSankeyDiagram: React.FC<Props> = ({
                         borderTop='1px solid'
                         borderColor='gray.600'
                         p={5}
+                        maxH='35vh'
+                        overflowY='auto'
                         initial={{ y: '100%' }}
                         animate={{ y: 0 }}
                         exit={{ y: '100%' }}
                         transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-                        boxShadow='0 -4px 20px rgba(0,0,0,0.4)'
-                        zIndex={10}
+                        boxShadow='0 -8px 30px rgba(0,0,0,0.5)'
+                        zIndex={100}
                     >
                         <Flex justify='space-between' align='center' mb={3}>
                             <Box>
