@@ -46,7 +46,7 @@ const formatValue = (value: number, metric: string) => {
 const CONN_H = 38;         // Height per flow sub-band within a connection
 const CONN_GAP = 6;        // Gap between sub-bands in a connection
 const CONN_MARGIN = 22;    // Gap between connections
-const TIER_W = 22;
+const TIER_W = 30;
 const DOT_R = 9;
 const TOP_MARGIN = 48;
 const ACTION_BADGE_MAX_W = 110; // right-alignment zone width for action badges
@@ -727,13 +727,7 @@ const DualSankeyDiagram: React.FC<Props> = ({
                                                 );
                                             })}
 
-                                            {/* Protocol/port label below the source label */}
-                                            <text
-                                                x={lo.srcX} y={band.y + 14}
-                                                fontSize={9} fill='#4A5568' fontFamily='monospace'
-                                            >
-                                                {band.lf.protocol}:{band.lf.destPort}
-                                            </text>
+                                            {/* No per-band protocol label — shown in detail panel on click */}
                                         </g>
                                     );
                                 })}
