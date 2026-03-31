@@ -175,15 +175,20 @@ const TopologyGraph: React.FC<Props> = ({
         return { nodes: allNodes, edges: Array.from(edgeMap.values()) };
     }, [rawGraph, collapsedNs]);
 
-    // Namespace color map
+    // Stable namespace color map — once a namespace gets a color, it keeps it
+    const nsColorsRef = React.useRef(new Map<string, string>());
     const nsColors = React.useMemo(() => {
-        if (!graph || graph.nodes.length === 0) return new Map<string, string>();
+        if (!graph || graph.nodes.length === 0) return nsColorsRef.current;
         const namespaces = [...new Set(graph.nodes.map((n) => n.namespace))];
-        const colorMap = new Map<string, string>();
-        namespaces.forEach((ns, i) => {
-            colorMap.set(ns, NAMESPACE_COLORS[i % NAMESPACE_COLORS.length]);
-        });
-        return colorMap;
+        for (const ns of namespaces) {
+            if (!nsColorsRef.current.has(ns)) {
+                nsColorsRef.current.set(
+                    ns,
+                    NAMESPACE_COLORS[nsColorsRef.current.size % NAMESPACE_COLORS.length],
+                );
+            }
+        }
+        return new Map(nsColorsRef.current);
     }, [graph]);
 
     const maxBytes = React.useMemo(
