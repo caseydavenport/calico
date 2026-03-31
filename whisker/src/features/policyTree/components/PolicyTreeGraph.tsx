@@ -450,7 +450,20 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
                                     style={{ cursor: 'pointer' }}
                                     onMouseEnter={(e) => {
                                         setHoveredEdge(edgeFullKey);
-                                        setTooltipContent(`${edge.flowCount} flows · ${formatBytes(edge.volume)}\nAction: ${edge.action}`);
+                                        // Find paths through this edge to show src→dst
+                                        const edgePaths = dag.paths.filter((p) => {
+                                            const fi = p.stepIds.indexOf(edge.fromId);
+                                            const ti = p.stepIds.indexOf(edge.toId);
+                                            return fi >= 0 && ti >= 0 && ti > fi && p.action === edge.action;
+                                        });
+                                        const srcs = [...new Set(edgePaths.flatMap((p) => [...p.sources]))].map((s) => s.split('/').pop());
+                                        const dsts = [...new Set(edgePaths.flatMap((p) => [...p.dests]))].map((s) => s.split('/').pop());
+                                        setTooltipContent(
+                                            `${edge.flowCount} flows · ${formatBytes(edge.volume)}\n` +
+                                            `Action: ${edge.action}\n` +
+                                            `${srcs.slice(0, 5).join(', ')}${srcs.length > 5 ? ` +${srcs.length - 5}` : ''}\n` +
+                                            `→ ${dsts.slice(0, 5).join(', ')}${dsts.length > 5 ? ` +${dsts.length - 5}` : ''}`,
+                                        );
                                         setTooltipPos({ x: e.clientX, y: e.clientY });
                                     }}
                                     onMouseLeave={() => { setHoveredEdge(null); setTooltipContent(''); }}
@@ -544,7 +557,16 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
                                 onMouseEnter={(e) => {
                                     setHoveredNode(n.id);
                                     setTooltipContent(
-                                        `${step.label}\n${step.tier ? `Tier: ${step.tier}\n` : ''}Action: ${step.action}\n${n.flowPaths.length} unique traces · ${formatBytes(n.totalVolume)}`,
+                                        (() => {
+                                            const srcs = [...new Set(n.flowPaths.flatMap((p) => [...p.sources]))].map((s) => s.split('/').pop());
+                                            const dsts = [...new Set(n.flowPaths.flatMap((p) => [...p.dests]))].map((s) => s.split('/').pop());
+                                            return `${step.label}\n` +
+                                                `${step.tier ? `Tier: ${step.tier}\n` : ''}` +
+                                                `Action: ${step.action}\n` +
+                                                `${n.flowPaths.reduce((s, p) => s + p.flowCount, 0)} flows · ${formatBytes(n.totalVolume)}\n` +
+                                                `\n${srcs.slice(0, 5).join(', ')}${srcs.length > 5 ? ` +${srcs.length - 5}` : ''}\n` +
+                                                `→ ${dsts.slice(0, 5).join(', ')}${dsts.length > 5 ? ` +${dsts.length - 5}` : ''}`;
+                                        })(),
                                     );
                                     setTooltipPos({ x: e.clientX, y: e.clientY });
                                 }}
