@@ -58,12 +58,80 @@ const TopologyGraph: React.FC<Props> = ({
     const [tooltipContent, setTooltipContent] = React.useState('');
     const [tooltipPos, setTooltipPos] = React.useState({ x: 0, y: 0 });
     const [transform, setTransform] = React.useState(d3.zoomIdentity);
+    const [collapsedNs, setCollapsedNs] = React.useState(new Set<string>());
     const simulationRef = React.useRef<d3.Simulation<SimNode, SimEdge>>();
 
-    const graph = React.useMemo(
+    const toggleNsCollapse = React.useCallback((ns: string) => {
+        setCollapsedNs((prev) => {
+            const next = new Set(prev);
+            if (next.has(ns)) next.delete(ns);
+            else next.add(ns);
+            return next;
+        });
+    }, []);
+
+    const rawGraph = React.useMemo(
         () => buildTopologyGraph(flows || []),
         [flows],
     );
+
+    // Apply namespace collapsing: replace all nodes in a collapsed namespace
+    // with a single group node, merge edges accordingly.
+    const graph = React.useMemo(() => {
+        if (collapsedNs.size === 0) return rawGraph;
+
+        const groupNodes = new Map<string, TopologyNode>();
+        const keptNodes: TopologyNode[] = [];
+
+        for (const n of rawGraph.nodes) {
+            if (collapsedNs.has(n.namespace)) {
+                const groupId = `_group_/${n.namespace}`;
+                const existing = groupNodes.get(groupId);
+                if (existing) {
+                    existing.totalBytes += n.totalBytes;
+                } else {
+                    groupNodes.set(groupId, {
+                        id: groupId,
+                        name: n.namespace,
+                        namespace: n.namespace,
+                        totalBytes: n.totalBytes,
+                        type: 'workload',
+                    });
+                }
+            } else {
+                keptNodes.push(n);
+            }
+        }
+
+        const allNodes = [...keptNodes, ...groupNodes.values()];
+        const nodeIdMap = new Map<string, string>();
+        for (const n of rawGraph.nodes) {
+            if (collapsedNs.has(n.namespace)) {
+                nodeIdMap.set(n.id, `_group_/${n.namespace}`);
+            } else {
+                nodeIdMap.set(n.id, n.id);
+            }
+        }
+
+        // Merge edges
+        const edgeMap = new Map<string, TopologyEdge>();
+        for (const e of rawGraph.edges) {
+            const src = nodeIdMap.get(e.source) || e.source;
+            const dst = nodeIdMap.get(e.target) || e.target;
+            if (src === dst) continue; // skip intra-namespace edges when collapsed
+            const key = `${src}->${dst}`;
+            const existing = edgeMap.get(key);
+            if (existing) {
+                existing.bytes += e.bytes;
+                existing.packets += e.packets;
+                if (existing.action !== e.action) existing.action = 'Mixed';
+            } else {
+                edgeMap.set(key, { ...e, id: key, source: src, target: dst });
+            }
+        }
+
+        return { nodes: allNodes, edges: Array.from(edgeMap.values()) };
+    }, [rawGraph, collapsedNs]);
 
     // Namespace color map
     const nsColors = React.useMemo(() => {
@@ -94,19 +162,23 @@ const TopologyGraph: React.FC<Props> = ({
         });
     }, [selectedNode, flows]);
 
-    // D3 simulation — preserve node positions across data updates
+    // D3 simulation — preserve positions, only reheat gently on data updates
     const prevNodesRef = React.useRef(new Map<string, { x: number; y: number }>());
+    const isFirstRender = React.useRef(true);
 
     React.useEffect(() => {
         if (graph.nodes.length === 0) return;
 
         const prev = prevNodesRef.current;
+        const hasExisting = prev.size > 0;
         const simNodes: SimNode[] = graph.nodes.map((n) => {
             const saved = prev.get(n.id);
             return {
                 ...n,
                 x: saved?.x ?? width / 2 + (Math.random() - 0.5) * 300,
                 y: saved?.y ?? height / 2 + (Math.random() - 0.5) * 300,
+                // Pin existing nodes so they don't bounce
+                ...(saved && hasExisting && !isFirstRender.current ? { fx: saved.x, fy: saved.y } : {}),
             };
         });
 
@@ -119,46 +191,89 @@ const TopologyGraph: React.FC<Props> = ({
             }))
             .filter((e) => e.source && e.target);
 
-        // Namespace clustering force
-        const nsPositions = new Map<string, { x: number; y: number; count: number }>();
-        for (const n of simNodes) {
-            const ns = n.namespace;
-            const pos = nsPositions.get(ns) || { x: 0, y: 0, count: 0 };
-            pos.x += n.x!;
-            pos.y += n.y!;
-            pos.count++;
-            nsPositions.set(ns, pos);
-        }
+        // Namespace bounding box separation force
+        const nsSeparation = () => {
+            const nsBounds = new Map<string, { minX: number; maxX: number; minY: number; maxY: number; nodes: SimNode[] }>();
+            for (const n of simNodes) {
+                const ns = n.namespace;
+                const b = nsBounds.get(ns) || { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, nodes: [] };
+                b.minX = Math.min(b.minX, n.x! - 40);
+                b.maxX = Math.max(b.maxX, n.x! + 40);
+                b.minY = Math.min(b.minY, n.y! - 40);
+                b.maxY = Math.max(b.maxY, n.y! + 40);
+                b.nodes.push(n);
+                nsBounds.set(ns, b);
+            }
+
+            // Push apart overlapping namespace bounding boxes
+            const entries = Array.from(nsBounds.entries());
+            for (let i = 0; i < entries.length; i++) {
+                for (let j = i + 1; j < entries.length; j++) {
+                    const [, a] = entries[i];
+                    const [, b] = entries[j];
+                    const pad = 30;
+                    const overlapX = Math.min(a.maxX + pad, b.maxX + pad) - Math.max(a.minX - pad, b.minX - pad);
+                    const overlapY = Math.min(a.maxY + pad, b.maxY + pad) - Math.max(a.minY - pad, b.minY - pad);
+
+                    if (overlapX > 0 && overlapY > 0) {
+                        const acx = (a.minX + a.maxX) / 2;
+                        const acy = (a.minY + a.maxY) / 2;
+                        const bcx = (b.minX + b.maxX) / 2;
+                        const bcy = (b.minY + b.maxY) / 2;
+                        const dx = bcx - acx || 0.1;
+                        const dy = bcy - acy || 0.1;
+                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                        const force = Math.min(overlapX, overlapY) * 0.02;
+
+                        for (const n of a.nodes) {
+                            n.vx! -= (dx / dist) * force;
+                            n.vy! -= (dy / dist) * force;
+                        }
+                        for (const n of b.nodes) {
+                            n.vx! += (dx / dist) * force;
+                            n.vy! += (dy / dist) * force;
+                        }
+                    }
+                }
+            }
+
+            // Cluster nodes within same namespace
+            for (const [, b] of nsBounds) {
+                if (b.nodes.length < 2) continue;
+                const cx = b.nodes.reduce((s, n) => s + n.x!, 0) / b.nodes.length;
+                const cy = b.nodes.reduce((s, n) => s + n.y!, 0) / b.nodes.length;
+                for (const n of b.nodes) {
+                    n.vx! += (cx - n.x!) * 0.008;
+                    n.vy! += (cy - n.y!) * 0.008;
+                }
+            }
+        };
 
         const simulation = d3
             .forceSimulation<SimNode>(simNodes)
-            .force(
-                'link',
-                d3.forceLink<SimNode, SimEdge>(simEdges)
-                    .id((d) => d.id)
-                    .distance(120),
-            )
+            .force('link', d3.forceLink<SimNode, SimEdge>(simEdges).id((d) => d.id).distance(120))
             .force('charge', d3.forceManyBody().strength(-400))
             .force('center', d3.forceCenter(width / 2, height / 2))
             .force('collision', d3.forceCollide().radius(40))
-            // Gentle namespace clustering
-            .force('cluster', () => {
-                for (const node of simNodes) {
-                    const ns = nsPositions.get(node.namespace);
-                    if (ns && ns.count > 1) {
-                        const cx = ns.x / ns.count;
-                        const cy = ns.y / ns.count;
-                        node.vx! += (cx - node.x!) * 0.005;
-                        node.vy! += (cy - node.y!) * 0.005;
-                    }
-                }
-            })
+            .force('nsSeparation', nsSeparation)
+            // On data refresh, only apply a tiny nudge instead of full reheat
+            .alpha(isFirstRender.current ? 1 : 0.05)
             .alphaDecay(0.03);
 
         simulationRef.current = simulation;
+        isFirstRender.current = false;
+
+        // After a short settle, unpin existing nodes so they can adjust
+        if (hasExisting) {
+            setTimeout(() => {
+                for (const n of simNodes) {
+                    n.fx = undefined;
+                    n.fy = undefined;
+                }
+            }, 500);
+        }
 
         simulation.on('tick', () => {
-            // Save positions for next update
             for (const n of simNodes) {
                 prevNodesRef.current.set(n.id, { x: n.x!, y: n.y! });
             }
@@ -272,7 +387,7 @@ const TopologyGraph: React.FC<Props> = ({
                 <rect width={width} height={height} fill='transparent' />
 
                 <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
-                    {/* Namespace hulls */}
+                    {/* Namespace hulls — clickable label to collapse/expand */}
                     {(() => {
                         const nsByNs = new Map<string, SimNode[]>();
                         for (const n of nodes) {
@@ -282,7 +397,6 @@ const TopologyGraph: React.FC<Props> = ({
                             nsByNs.set(n.namespace, arr);
                         }
                         return Array.from(nsByNs.entries()).map(([ns, nsNodes]) => {
-                            if (nsNodes.length < 2) return null;
                             const padding = 50;
                             const xs = nsNodes.map((n) => n.x!);
                             const ys = nsNodes.map((n) => n.y!);
@@ -291,6 +405,7 @@ const TopologyGraph: React.FC<Props> = ({
                             const x1 = Math.max(...xs) + padding;
                             const y1 = Math.max(...ys) + padding;
                             const color = nsColors.get(ns) || '#4A5568';
+                            const isCollapsed = collapsedNs.has(ns);
                             return (
                                 <g key={`hull-${ns}`}>
                                     <rect
@@ -298,20 +413,31 @@ const TopologyGraph: React.FC<Props> = ({
                                         width={x1 - x0} height={y1 - y0}
                                         rx={12}
                                         fill={color}
-                                        fillOpacity={0.06}
+                                        fillOpacity={isCollapsed ? 0.15 : 0.06}
                                         stroke={color}
-                                        strokeOpacity={0.15}
-                                        strokeWidth={1}
+                                        strokeOpacity={isCollapsed ? 0.4 : 0.15}
+                                        strokeWidth={isCollapsed ? 2 : 1}
                                     />
+                                    {/* Clickable namespace label */}
                                     <text
-                                        x={x0 + 8} y={y0 + 14}
-                                        fontSize={10}
+                                        x={x0 + 10} y={y0 + 16}
+                                        fontSize={11}
                                         fill={color}
                                         fontFamily='monospace'
                                         fontWeight='bold'
-                                        opacity={0.5}
+                                        opacity={0.8}
+                                        style={{ cursor: 'pointer' }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            toggleNsCollapse(ns);
+                                        }}
                                     >
-                                        {ns}
+                                        {isCollapsed ? '▸' : '▾'} {ns}
+                                        {isCollapsed && (
+                                            <tspan fill='#A0AEC0' fontWeight='normal'>
+                                                {' '}({nsNodes.length === 1 ? '1 workload' : `collapsed`})
+                                            </tspan>
+                                        )}
                                     </text>
                                 </g>
                             );

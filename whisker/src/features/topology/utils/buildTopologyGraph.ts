@@ -24,8 +24,11 @@ export type TopologyGraph = {
     edges: TopologyEdge[];
 };
 
+const isExternal = (namespace: string) =>
+    !namespace || namespace === '-' || namespace === '';
+
 const nodeId = (name: string, namespace: string) =>
-    `${namespace || '_external_'}/${name}`;
+    `${isExternal(namespace) ? '_external_' : namespace}/${name}`;
 
 export const buildTopologyGraph = (flows: FlowLog[]): TopologyGraph => {
     const nodesMap = new Map<string, TopologyNode>();
@@ -44,9 +47,9 @@ export const buildTopologyGraph = (flows: FlowLog[]): TopologyGraph => {
             nodesMap.set(id, {
                 id,
                 name,
-                namespace: namespace || '(external)',
+                namespace: isExternal(namespace) ? '(external)' : namespace,
                 totalBytes: bytes,
-                type: namespace ? 'workload' : 'external',
+                type: isExternal(namespace) ? 'external' : 'workload',
             });
         }
         return id;
