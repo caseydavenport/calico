@@ -50,18 +50,34 @@ const shortKind = (kind: string) => {
     return map[kind] || kind;
 };
 
-const policyChain = (policies: Policy[]): string => {
-    if (!policies || policies.length === 0) return '—';
-    return policies
-        .sort((a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0))
-        .map((p) => {
-            if (p.kind === 'Profile' && p.name.startsWith('kns.'))
-                return 'Default Allow';
-            if (p.trigger) return `End of ${p.tier || 'default'}`;
-            return `${shortKind(p.kind)}:${p.name}(${p.action})`;
-        })
-        .join(' → ');
+type PolicySegment = {
+    text: string;
+    isDeny: boolean;
+    isTerminal: boolean;
 };
+
+const policyChainSegments = (policies: Policy[]): PolicySegment[] => {
+    if (!policies || policies.length === 0) return [];
+    const sorted = [...policies].sort((a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0));
+    const segments: PolicySegment[] = [];
+    for (const p of sorted) {
+        if (p.kind === 'Profile' && p.name.startsWith('kns.')) {
+            segments.push({ text: 'Default Allow', isDeny: false, isTerminal: true });
+            break;
+        }
+        if (p.trigger) {
+            segments.push({ text: `End of ${p.tier || 'default'}`, isDeny: p.action === 'Deny', isTerminal: true });
+            break;
+        }
+        const isDeny = p.action === 'Deny';
+        segments.push({ text: `${shortKind(p.kind)}:${p.name}(${p.action})`, isDeny, isTerminal: isDeny });
+        if (isDeny) break;
+    }
+    return segments;
+};
+
+const isEgressDenied = (segments: PolicySegment[]): boolean =>
+    segments.length > 0 && segments[segments.length - 1].isDeny;
 
 // Unique key for a logical flow (merges Src/Dst reporters)
 const flowKey = (f: FlowLog) =>
@@ -83,8 +99,8 @@ type MonitoredFlow = {
     lastSeen: number; // timestamp ms
     firstSeen: number;
     reporter: string;
-    egressPolicies: string;
-    ingressPolicies: string;
+    egressSegments: PolicySegment[];
+    ingressSegments: PolicySegment[];
 };
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
@@ -120,10 +136,9 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
             const policySorted = [...policies].sort(
                 (a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0),
             );
-            const policyStr = policyChain(policySorted);
+            const segments = policyChainSegments(policySorted);
 
             if (existing) {
-                // Update: take latest values
                 if (endTime > existing.lastSeen) {
                     existing.lastSeen = endTime;
                 }
@@ -133,9 +148,9 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                 existing.packetsIn = Math.max(existing.packetsIn, packetsIn);
                 existing.packetsOut = Math.max(existing.packetsOut, packetsOut);
                 if (f.reporter === 'Src') {
-                    existing.egressPolicies = policyStr;
+                    existing.egressSegments = segments;
                 } else {
-                    existing.ingressPolicies = policyStr;
+                    existing.ingressSegments = segments;
                 }
             } else {
                 map.set(key, {
@@ -154,8 +169,8 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                     lastSeen: endTime,
                     firstSeen: f.start_time.getTime(),
                     reporter: f.reporter,
-                    egressPolicies: f.reporter === 'Src' ? policyStr : '—',
-                    ingressPolicies: f.reporter === 'Dst' ? policyStr : '—',
+                    egressSegments: f.reporter === 'Src' ? segments : [],
+                    ingressSegments: f.reporter === 'Dst' ? segments : [],
                 });
             }
         }
@@ -223,6 +238,7 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                         const rowBg = isStale ? STALE_BG : ACTION_BG[f.action] || 'transparent';
                         const textColor = isStale ? 'gray.600' : 'gray.300';
                         const nameColor = isStale ? 'gray.600' : 'gray.200';
+                        const egressDenied = isEgressDenied(f.egressSegments);
 
                         return (
                             <Tr
@@ -283,15 +299,55 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                         {(f.packetsIn + f.packetsOut).toLocaleString()}
                                     </Text>
                                 </Td>
-                                <Td px={3} py={2} maxW='250px'>
-                                    <Text fontSize='xs' fontFamily='monospace' color={textColor} noOfLines={1}>
-                                        {f.egressPolicies}
-                                    </Text>
+                                <Td px={3} py={2} maxW='300px'>
+                                    <Flex gap={0} flexWrap='nowrap' align='center'>
+                                        {f.egressSegments.length === 0 ? (
+                                            <Text fontSize='xs' fontFamily='monospace' color='gray.600'>—</Text>
+                                        ) : (
+                                            f.egressSegments.map((seg, si) => (
+                                                <React.Fragment key={si}>
+                                                    {si > 0 && <Text fontSize='xs' fontFamily='monospace' color='gray.600' mx={0.5}>→</Text>}
+                                                    <Text
+                                                        fontSize='xs'
+                                                        fontFamily='monospace'
+                                                        fontWeight={seg.isDeny ? 'bold' : 'normal'}
+                                                        color={isStale ? 'gray.600' : seg.isDeny ? '#E53E3E' : textColor}
+                                                        noOfLines={1}
+                                                    >
+                                                        {seg.text}
+                                                    </Text>
+                                                </React.Fragment>
+                                            ))
+                                        )}
+                                    </Flex>
                                 </Td>
-                                <Td px={3} py={2} maxW='250px'>
-                                    <Text fontSize='xs' fontFamily='monospace' color={textColor} noOfLines={1}>
-                                        {f.ingressPolicies}
-                                    </Text>
+                                <Td px={3} py={2} maxW='300px'>
+                                    {egressDenied ? (
+                                        <Text fontSize='xs' fontFamily='monospace' color='gray.600' fontStyle='italic'>
+                                            blocked at egress
+                                        </Text>
+                                    ) : (
+                                        <Flex gap={0} flexWrap='nowrap' align='center'>
+                                            {f.ingressSegments.length === 0 ? (
+                                                <Text fontSize='xs' fontFamily='monospace' color='gray.600'>—</Text>
+                                            ) : (
+                                                f.ingressSegments.map((seg, si) => (
+                                                    <React.Fragment key={si}>
+                                                        {si > 0 && <Text fontSize='xs' fontFamily='monospace' color='gray.600' mx={0.5}>→</Text>}
+                                                        <Text
+                                                            fontSize='xs'
+                                                            fontFamily='monospace'
+                                                            fontWeight={seg.isDeny ? 'bold' : 'normal'}
+                                                            color={isStale ? 'gray.600' : seg.isDeny ? '#E53E3E' : textColor}
+                                                            noOfLines={1}
+                                                        >
+                                                            {seg.text}
+                                                        </Text>
+                                                    </React.Fragment>
+                                                ))
+                                            )}
+                                        </Flex>
+                                    )}
                                 </Td>
                                 <Td px={3} py={2}>
                                     <Text
