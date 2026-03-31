@@ -183,16 +183,16 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
     // Build tier ordering: collect unique tiers in the order they appear
     // across all traces. This determines column assignment.
     // Tier normalization:
-    // - Explicit tier policies → their tier's column
-    // - Terminal actions (EndOfTier, Default Allow, explicit Allow/Deny)
-    //   go in '_outcome_' — a final column to the right of all tiers
-    // - This ensures no node-to-node edges within the same column
+    // - Explicit tier policies (including ones that Allow/Deny) stay in their tier
+    // - EndOfTier (default deny) and Profile (default allow) go to '_outcome_'
+    //   since they represent fallthrough outcomes, not explicit policy decisions
+    // - Trigger policies (N/A) stay in their tier
     const normTier = (step: Step) => {
-        // All terminal actions go in the outcome column
-        if (step.isTerminal) return '_outcome_';
-        // Trigger policies (gray dots, action=N/A) stay in their tier
-        if (step.action === 'N/A') return step.tier || 'default';
-        // Regular policies
+        // EndOfTier default deny → outcome column
+        if (step.kind === 'EndOfTier') return '_outcome_';
+        // Profile default allow → outcome column
+        if (step.kind === 'Profile' && step.isTerminal) return '_outcome_';
+        // Everything else stays in its tier
         const t = step.tier;
         if (!t || t === '') return 'default';
         return t;
