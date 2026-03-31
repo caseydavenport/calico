@@ -61,6 +61,7 @@ const TopologyGraph: React.FC<Props> = ({
     const [transform, setTransform] = React.useState(d3.zoomIdentity);
     const transformRef = React.useRef(d3.zoomIdentity);
     const [collapsedNs, setCollapsedNs] = React.useState(new Set<string>());
+    const didAutoCollapse = React.useRef(false);
     const simulationRef = React.useRef<d3.Simulation<SimNode, SimEdge>>();
     const dragRef = React.useRef<{
         type: 'ns' | 'node';
@@ -117,6 +118,34 @@ const TopologyGraph: React.FC<Props> = ({
         () => buildTopologyGraph(flows || []),
         [flows],
     );
+
+    // Auto-collapse namespaces with >2 workloads on first load
+    React.useEffect(() => {
+        if (didAutoCollapse.current || rawGraph.nodes.length === 0) return;
+        didAutoCollapse.current = true;
+        const nsCounts = new Map<string, number>();
+        for (const n of rawGraph.nodes) {
+            if (n.type === 'external') continue;
+            nsCounts.set(n.namespace, (nsCounts.get(n.namespace) || 0) + 1);
+        }
+        const toCollapse = new Set<string>();
+        for (const [ns, count] of nsCounts) {
+            if (count > 2) {
+                toCollapse.add(ns);
+                // Pre-set group node position as centroid
+                let cx = 0, cy = 0, c = 0;
+                for (const [id, pos] of prevNodesRef.current) {
+                    if (id.startsWith(`${ns}/`)) { cx += pos.x; cy += pos.y; c++; }
+                }
+                if (c > 0) {
+                    prevNodesRef.current.set(`_group_/${ns}`, { x: cx / c, y: cy / c });
+                }
+            }
+        }
+        if (toCollapse.size > 0) {
+            setCollapsedNs(toCollapse);
+        }
+    }, [rawGraph]);
 
     // Apply namespace collapsing: replace all nodes in a collapsed namespace
     // with a single group node, merge edges accordingly.
@@ -597,10 +626,10 @@ const TopologyGraph: React.FC<Props> = ({
                                         strokeOpacity={isCollapsed ? 0.4 : 0.15}
                                         strokeWidth={isCollapsed ? 2 : 1}
                                     />
-                                    {/* Clickable namespace label */}
+                                    {/* Clickable namespace label — scales inversely with zoom for readability */}
                                     <text
                                         x={x0 + 10} y={y0 + 16}
-                                        fontSize={11}
+                                        fontSize={Math.min(14, 11 / Math.max(transform.k, 0.3))}
                                         fill={color}
                                         fontFamily='monospace'
                                         fontWeight='bold'
@@ -612,7 +641,7 @@ const TopologyGraph: React.FC<Props> = ({
                                         }}
                                     >
                                         {isCollapsed ? '▸' : '▾'} {ns}
-                                        {isCollapsed && (
+                                        {isCollapsed && transform.k > 0.5 && (
                                             <tspan fill='#A0AEC0' fontWeight='normal'>
                                                 {' '}({rawGraph.nodes.filter((n) => n.namespace === ns).length} workloads)
                                             </tspan>
@@ -725,26 +754,33 @@ const TopologyGraph: React.FC<Props> = ({
                                             strokeWidth={isSelected ? 2.5 : isHovered ? 2 : 1}
                                         />
                                     )}
-                                    {/* Node label */}
-                                    <text
-                                        dy={r + 14}
-                                        textAnchor='middle'
-                                        fontSize={11}
-                                        fill='#E2E8F0'
-                                        fontFamily='monospace'
-                                        fontWeight={isSelected ? 'bold' : '600'}
-                                    >
-                                        {cleanName(node.name)}
-                                    </text>
-                                    <text
-                                        dy={r + 25}
-                                        textAnchor='middle'
-                                        fontSize={9}
-                                        fill='#A0AEC0'
-                                        fontFamily='monospace'
-                                    >
-                                        {node.namespace}
-                                    </text>
+                                    {/* Node label: visible on hover, selection, or sufficient zoom */}
+                                    {(isHovered || isSelected || transform.k > 0.8) && (
+                                        <>
+                                            <text
+                                                dy={r + 14}
+                                                textAnchor='middle'
+                                                fontSize={11}
+                                                fill='#E2E8F0'
+                                                fontFamily='monospace'
+                                                fontWeight={isSelected ? 'bold' : '600'}
+                                                opacity={isHovered || isSelected ? 1 : 0.7}
+                                            >
+                                                {cleanName(node.name)}
+                                            </text>
+                                            {(isHovered || isSelected) && (
+                                                <text
+                                                    dy={r + 25}
+                                                    textAnchor='middle'
+                                                    fontSize={9}
+                                                    fill='#A0AEC0'
+                                                    fontFamily='monospace'
+                                                >
+                                                    {node.namespace}
+                                                </text>
+                                            )}
+                                        </>
+                                    )}
                                 </g>
                             );
                         })}
