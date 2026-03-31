@@ -9,6 +9,7 @@ const NAV_ITEMS = [
     { path: '/monitor', label: 'Flow Monitor' },
     { path: '/policy-flows', label: 'Policy Flows' },
     { path: '/policy-tree', label: 'Policy Tree' },
+    { path: '/policy-matrix', label: 'Policy Matrix' },
     { path: '/topology', label: 'Topology' },
 ];
 

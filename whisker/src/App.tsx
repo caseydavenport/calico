@@ -3,7 +3,7 @@ import {
     AppErrorBoundary,
     FlowLogsErrorBoundary,
 } from '@/components/core/ErrorBoundary';
-import { FlowLogsPage, FlowMonitorPage, PolicyFlowsPage, PolicyTreePage, TopologyPage } from '@/pages';
+import { FlowLogsPage, FlowMonitorPage, PolicyFlowsPage, PolicyMatrixPage, PolicyTreePage, TopologyPage } from '@/pages';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import React from 'react';
@@ -54,6 +54,11 @@ export const routes: RouteObject[] = [
             {
                 path: 'policy-tree',
                 element: <PolicyTreePage />,
+                ErrorBoundary: FlowLogsErrorBoundary,
+            },
+            {
+                path: 'policy-matrix',
+                element: <PolicyMatrixPage />,
                 ErrorBoundary: FlowLogsErrorBoundary,
             },
             {
