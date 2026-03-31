@@ -101,6 +101,7 @@ type MonitoredFlow = {
     reporter: string;
     egressSegments: PolicySegment[];
     ingressSegments: PolicySegment[];
+    updatedAt: number; // timestamp of last data change
 };
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
@@ -142,6 +143,15 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                 if (endTime > existing.lastSeen) {
                     existing.lastSeen = endTime;
                 }
+                // Detect actual data changes for update animation
+                const changed =
+                    bytesIn > existing.bytesIn ||
+                    bytesOut > existing.bytesOut ||
+                    packetsIn > existing.packetsIn ||
+                    packetsOut > existing.packetsOut;
+                if (changed) {
+                    existing.updatedAt = Date.now();
+                }
                 existing.action = f.action;
                 existing.bytesIn = Math.max(existing.bytesIn, bytesIn);
                 existing.bytesOut = Math.max(existing.bytesOut, bytesOut);
@@ -171,6 +181,7 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                     reporter: f.reporter,
                     egressSegments: f.reporter === 'Src' ? segments : [],
                     ingressSegments: f.reporter === 'Dst' ? segments : [],
+                    updatedAt: Date.now(),
                 });
             }
         }
@@ -239,6 +250,8 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                         const textColor = isStale ? 'gray.600' : 'gray.300';
                         const nameColor = isStale ? 'gray.600' : 'gray.200';
                         const egressDenied = isEgressDenied(f.egressSegments);
+                        // Flash when data updated in the last 2 seconds
+                        const recentlyUpdated = !isStale && (now - f.updatedAt < 2000);
 
                         return (
                             <Tr
@@ -246,6 +259,13 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                 bg={rowBg}
                                 _hover={{ bg: isStale ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.05)' }}
                                 transition='background 0.3s ease'
+                                sx={recentlyUpdated ? {
+                                    animation: 'rowFlash 1.5s ease-out',
+                                    '@keyframes rowFlash': {
+                                        '0%': { background: 'rgba(255, 255, 255, 0.12)' },
+                                        '100%': { background: rowBg },
+                                    },
+                                } : undefined}
                             >
                                 <Td px={3} py={2}>
                                     <Flex align='center' gap={1.5}>
