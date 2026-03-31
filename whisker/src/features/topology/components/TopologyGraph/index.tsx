@@ -58,8 +58,15 @@ const TopologyGraph: React.FC<Props> = ({
     const [tooltipContent, setTooltipContent] = React.useState('');
     const [tooltipPos, setTooltipPos] = React.useState({ x: 0, y: 0 });
     const [transform, setTransform] = React.useState(d3.zoomIdentity);
+    const transformRef = React.useRef(d3.zoomIdentity);
     const [collapsedNs, setCollapsedNs] = React.useState(new Set<string>());
     const simulationRef = React.useRef<d3.Simulation<SimNode, SimEdge>>();
+    const dragRef = React.useRef<{
+        ns: string;
+        startX: number;
+        startY: number;
+        nodeStarts: Map<string, { x: number; y: number }>;
+    } | null>(null);
 
     const toggleNsCollapse = React.useCallback((ns: string) => {
         setCollapsedNs((prev) => {
@@ -247,6 +254,15 @@ const TopologyGraph: React.FC<Props> = ({
                     n.vy! += (cy - n.y!) * 0.008;
                 }
             }
+
+            // Boundary force: keep nodes within viewport with soft padding
+            const margin = 80;
+            for (const n of simNodes) {
+                if (n.x! < margin) n.vx! += (margin - n.x!) * 0.05;
+                if (n.x! > width - margin) n.vx! -= (n.x! - (width - margin)) * 0.05;
+                if (n.y! < margin) n.vy! += (margin - n.y!) * 0.05;
+                if (n.y! > height - margin) n.vy! -= (n.y! - (height - margin)) * 0.05;
+            }
         };
 
         const simulation = d3
@@ -291,22 +307,131 @@ const TopologyGraph: React.FC<Props> = ({
 
         const zoom = d3.zoom<SVGSVGElement, unknown>()
             .scaleExtent([0.2, 4])
-            .on('zoom', (event) => setTransform(event.transform));
+            .filter((event) => {
+                // Don't start zoom drag on namespace hulls or nodes
+                const target = event.target as SVGElement;
+                if (target.closest('[data-ns-drag]') || target.closest('[data-node-id]')) {
+                    return event.type === 'wheel'; // still allow scroll-zoom
+                }
+                return true;
+            })
+            .on('zoom', (event) => {
+                setTransform(event.transform);
+                transformRef.current = event.transform;
+            });
 
         d3.select(svg).call(zoom);
 
-        // Click handler for node selection (bypasses D3 zoom)
+        // Click handler for node selection
         const handleClick = (e: MouseEvent) => {
+            if (dragRef.current) return; // don't select during drag
             const target = e.target as SVGElement;
             const nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id');
             if (nodeId) {
                 setSelectedNode((prev) => prev === nodeId ? null : nodeId);
-            } else if (target === svg || target.tagName === 'rect') {
+            } else if (target === svg || (target.tagName === 'rect' && !target.closest('[data-ns-drag]'))) {
                 setSelectedNode(null);
             }
         };
         svg.addEventListener('click', handleClick);
-        return () => svg.removeEventListener('click', handleClick);
+
+        // Namespace drag handlers
+        const handlePointerDown = (e: PointerEvent) => {
+            const target = e.target as SVGElement;
+            const nsEl = target.closest('[data-ns-drag]');
+            if (!nsEl) return;
+            const ns = nsEl.getAttribute('data-ns-drag')!;
+
+            // Collect starting positions of all nodes in this namespace
+            const nodeStarts = new Map<string, { x: number; y: number }>();
+            for (const [id, pos] of prevNodesRef.current) {
+                if (id.startsWith(`${ns}/`) || id.startsWith(`_group_/${ns}`)) {
+                    nodeStarts.set(id, { ...pos });
+                }
+            }
+
+            // Transform pointer to SVG coordinates
+            const pt = svg.createSVGPoint();
+            pt.x = e.clientX;
+            pt.y = e.clientY;
+            const svgPt = pt.matrixTransform(svg.getScreenCTM()!.inverse());
+
+            dragRef.current = {
+                ns,
+                startX: svgPt.x,
+                startY: svgPt.y,
+                nodeStarts,
+            };
+
+            // Pin all nodes in the namespace
+            if (simulationRef.current) {
+                for (const node of simulationRef.current.nodes()) {
+                    if (nodeStarts.has(node.id)) {
+                        node.fx = node.x;
+                        node.fy = node.y;
+                    }
+                }
+                simulationRef.current.alphaTarget(0.1).restart();
+            }
+
+            (e.target as Element).setPointerCapture(e.pointerId);
+            e.stopPropagation();
+        };
+
+        const handlePointerMove = (e: PointerEvent) => {
+            if (!dragRef.current) return;
+            const { nodeStarts, startX, startY } = dragRef.current;
+
+            const pt = svg.createSVGPoint();
+            pt.x = e.clientX;
+            pt.y = e.clientY;
+            const svgPt = pt.matrixTransform(svg.getScreenCTM()!.inverse());
+
+            // Account for current zoom transform
+            const k = transformRef.current.k;
+            const dx = (svgPt.x - startX) / k;
+            const dy = (svgPt.y - startY) / k;
+
+            if (simulationRef.current) {
+                for (const node of simulationRef.current.nodes()) {
+                    const start = nodeStarts.get(node.id);
+                    if (start) {
+                        node.fx = start.x + dx;
+                        node.fy = start.y + dy;
+                    }
+                }
+            }
+        };
+
+        const handlePointerUp = () => {
+            if (!dragRef.current) return;
+            const { nodeStarts } = dragRef.current;
+
+            // Unpin nodes, save new positions
+            if (simulationRef.current) {
+                for (const node of simulationRef.current.nodes()) {
+                    if (nodeStarts.has(node.id)) {
+                        prevNodesRef.current.set(node.id, { x: node.x!, y: node.y! });
+                        node.fx = undefined;
+                        node.fy = undefined;
+                    }
+                }
+                simulationRef.current.alphaTarget(0);
+            }
+
+            dragRef.current = null;
+        };
+
+        svg.addEventListener('pointerdown', handlePointerDown);
+        svg.addEventListener('pointermove', handlePointerMove);
+        svg.addEventListener('pointerup', handlePointerUp);
+
+        return () => {
+            svg.removeEventListener('click', handleClick);
+            svg.removeEventListener('pointerdown', handlePointerDown);
+            svg.removeEventListener('pointermove', handlePointerMove);
+            svg.removeEventListener('pointerup', handlePointerUp);
+        };
     }, []);
 
     // Auto-select from highlight params
@@ -407,7 +532,9 @@ const TopologyGraph: React.FC<Props> = ({
                             const color = nsColors.get(ns) || '#4A5568';
                             const isCollapsed = collapsedNs.has(ns);
                             return (
-                                <g key={`hull-${ns}`}>
+                                <g key={`hull-${ns}`} data-ns-drag={ns}
+                                    style={{ cursor: 'grab' }}
+                                >
                                     <rect
                                         x={x0} y={y0}
                                         width={x1 - x0} height={y1 - y0}
