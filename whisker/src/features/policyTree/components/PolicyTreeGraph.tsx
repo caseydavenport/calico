@@ -442,19 +442,29 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
                         );
                     })}
 
-                    {/* Entry lines (from left edge to first column nodes) */}
-                    {dag.nodes.filter((n) => n.col === 0).map((n) => {
+                    {/* Entry lines — every node that is the FIRST step of a trace gets a line from the left */}
+                    {dag.nodes.filter((n) => {
+                        // Is this node the first step of any flow path?
+                        return n.flowPaths.some((p) => p.stepIds[0] === n.id);
+                    }).map((n) => {
                         const pos = nodePos.get(n.id);
                         if (!pos) return null;
-                        const w = 2 + (Math.log(n.totalVolume + 1) / Math.log(maxVol + 1)) * 10;
+                        const entryPaths = n.flowPaths.filter((p) => p.stepIds[0] === n.id);
+                        const entryVol = entryPaths.reduce((s, p) => s + p.volume, 0);
+                        const w = 2 + (Math.log(entryVol + 1) / Math.log(maxVol + 1)) * 10;
+                        const isHighlighted = !highlightedEdges ||
+                            entryPaths.some((p) => {
+                                const node = dag.nodes.find((nn) => nn.id === (hoveredNode || selectedNode));
+                                return node?.flowPaths.includes(p);
+                            });
                         return (
-                            <line
+                            <path
                                 key={`entry-${n.id}`}
-                                x1={10} y1={pos.y}
-                                x2={pos.x - DOT_R} y2={pos.y}
+                                d={`M0,${pos.y} C${pos.x * 0.3},${pos.y} ${pos.x * 0.6},${pos.y} ${pos.x - DOT_R},${pos.y}`}
+                                fill='none'
                                 stroke='#4A5568'
                                 strokeWidth={w}
-                                strokeOpacity={!highlightedEdges ? 0.3 : 0.06}
+                                strokeOpacity={isHighlighted ? 0.3 : 0.06}
                                 strokeLinecap='round'
                                 style={{ transition: 'stroke-opacity 0.15s ease' }}
                             />
