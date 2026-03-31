@@ -182,19 +182,33 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
 
     // Build tier ordering: collect unique tiers in the order they appear
     // across all traces. This determines column assignment.
+    // Normalize tier: empty string, 'default', and profile all map to '_default_'
+    const normTier = (step: Step) => {
+        if (step.isTerminal && step.kind === 'Profile') return '_default_';
+        const t = step.tier;
+        if (!t || t === '' || t === 'default' || t === '_profile_') return '_default_';
+        return t;
+    };
+
     const tierOrder: string[] = [];
     const tierSet = new Set<string>();
     for (const path of paths) {
         for (const stepId of path.stepIds) {
             const step = stepMap.get(stepId);
             if (!step) continue;
-            const tier = step.tier || '_profile_';
-            // EndOfTier uses the same column as its tier
-            const effectiveTier = step.kind === 'EndOfTier' ? (step.tier || '_default_') : tier;
-            if (!tierSet.has(effectiveTier)) {
-                tierSet.add(effectiveTier);
-                tierOrder.push(effectiveTier);
+            const tier = normTier(step);
+            if (!tierSet.has(tier)) {
+                tierSet.add(tier);
+                tierOrder.push(tier);
             }
+        }
+    }
+    // Ensure _default_ is always last (it's the fallback tier)
+    if (tierSet.has('_default_')) {
+        const idx = tierOrder.indexOf('_default_');
+        if (idx >= 0 && idx < tierOrder.length - 1) {
+            tierOrder.splice(idx, 1);
+            tierOrder.push('_default_');
         }
     }
     const tierColMap = new Map<string, number>();
@@ -215,7 +229,7 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
             const step = stepMap.get(stepId);
             if (!step) continue;
 
-            const tier = step.kind === 'EndOfTier' ? (step.tier || '_default_') : (step.tier || '_profile_');
+            const tier = normTier(step);
             const col = tierColMap.get(tier) ?? i;
 
             if (!dagNodes.has(nodeKey)) {
@@ -270,14 +284,14 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
     const maxCol = Math.max(0, ...Array.from(dagNodes.values()).map((n) => n.col));
     const maxRow = Math.max(0, ...Array.from(dagNodes.values()).map((n) => n.row));
 
-    return { nodes: Array.from(dagNodes.values()), edges: dagEdges, maxCol, maxRow, paths };
+    return { nodes: Array.from(dagNodes.values()), edges: dagEdges, maxCol, maxRow, paths, tierOrder, tierColMap };
 };
 
 // ── Component ───────────────────────────────────────────────────────
 
 const DOT_R = 10;
-const COL_SPACING = 180;
-const ROW_SPACING = 44;
+const COL_SPACING = 220;
+const ROW_SPACING = 60;
 const LEFT_PAD = 40;
 const TOP_PAD = 50;
 
@@ -337,13 +351,12 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
         return edgeKeys;
     }, [hoveredNode, selectedNode, dag]);
 
-    // Collect unique tiers for column headers
+    // Column headers from tier ordering
     const tierCols = React.useMemo(() => {
         const map = new Map<number, string>();
-        for (const n of dag.nodes) {
-            if (n.step.tier && !map.has(n.col)) {
-                map.set(n.col, n.step.tier);
-            }
+        for (const [tier, col] of dag.tierColMap) {
+            const label = tier === '_default_' ? 'default' : tier;
+            map.set(col, label);
         }
         return map;
     }, [dag]);
@@ -390,8 +403,8 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
                         const w = 2 + (Math.log(edge.volume + 1) / Math.log(maxEdgeVol + 1)) * 10;
                         const edgeKey = `${edge.fromId}→${edge.toId}`;
                         const isHighlighted = !highlightedEdges || highlightedEdges.has(edgeKey);
-                        const isDeny = edge.action === 'Deny' || edge.action === 'Default Deny';
-                        const color = isDeny ? ACTION_COLORS.Deny : ACTION_COLORS.Pass;
+                        const isDeny = edge.action === 'Deny' || edge.action === 'Default Deny' || edge.action === 'N/A';
+                        const color = ACTION_COLORS[edge.action] || '#4A5568';
 
                         return (
                             <g key={edgeKey}>
