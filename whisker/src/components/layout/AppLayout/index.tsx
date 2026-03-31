@@ -6,6 +6,7 @@ import { PromotionsBanner } from '@/features/promotions/components';
 
 const NAV_ITEMS = [
     { path: '/flow-logs', label: 'Flow Logs' },
+    { path: '/monitor', label: 'Flow Monitor' },
     { path: '/policy-flows', label: 'Policy Flows' },
     { path: '/topology', label: 'Topology' },
 ];

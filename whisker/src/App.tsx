@@ -3,7 +3,7 @@ import {
     AppErrorBoundary,
     FlowLogsErrorBoundary,
 } from '@/components/core/ErrorBoundary';
-import { FlowLogsPage, PolicyFlowsPage, TopologyPage } from '@/pages';
+import { FlowLogsPage, FlowMonitorPage, PolicyFlowsPage, TopologyPage } from '@/pages';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import React from 'react';
@@ -44,6 +44,11 @@ export const routes: RouteObject[] = [
             {
                 path: 'topology',
                 element: <TopologyPage />,
+                ErrorBoundary: FlowLogsErrorBoundary,
+            },
+            {
+                path: 'monitor',
+                element: <FlowMonitorPage />,
                 ErrorBoundary: FlowLogsErrorBoundary,
             },
             {
