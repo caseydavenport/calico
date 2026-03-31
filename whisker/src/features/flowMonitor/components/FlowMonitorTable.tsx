@@ -88,6 +88,7 @@ type MonitoredFlow = {
 };
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+const REMOVE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
 
 const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
     const [now, setNow] = React.useState(Date.now());
@@ -156,6 +157,14 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                     egressPolicies: f.reporter === 'Src' ? policyStr : '—',
                     ingressPolicies: f.reporter === 'Dst' ? policyStr : '—',
                 });
+            }
+        }
+
+        // Remove flows older than 15 minutes
+        const cutoff = Date.now() - REMOVE_THRESHOLD_MS;
+        for (const [key, entry] of map) {
+            if (entry.lastSeen < cutoff) {
+                map.delete(key);
             }
         }
 
