@@ -250,8 +250,8 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                         const textColor = isStale ? 'gray.600' : 'gray.300';
                         const nameColor = isStale ? 'gray.600' : 'gray.200';
                         const egressDenied = isEgressDenied(f.egressSegments);
-                        // Flash when data updated in the last 2 seconds
-                        const recentlyUpdated = !isStale && (now - f.updatedAt < 2000);
+                        // Shimmer when data updated in the last 1 second
+                        const recentlyUpdated = !isStale && (now - f.updatedAt < 1000);
 
                         return (
                             <Tr
@@ -260,10 +260,12 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                 _hover={{ bg: isStale ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.05)' }}
                                 transition='background 0.3s ease'
                                 sx={recentlyUpdated ? {
-                                    animation: 'rowFlash 1.5s ease-out',
-                                    '@keyframes rowFlash': {
-                                        '0%': { background: 'rgba(255, 255, 255, 0.12)' },
-                                        '100%': { background: rowBg },
+                                    '& td': {
+                                        animation: 'textShimmer 0.8s ease-out',
+                                    },
+                                    '@keyframes textShimmer': {
+                                        '0%': { textShadow: '0 0 8px rgba(255,255,255,0.6)' },
+                                        '100%': { textShadow: 'none' },
                                     },
                                 } : undefined}
                             >
