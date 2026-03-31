@@ -35,7 +35,8 @@ const ACTION_COLORS: Record<string, string> = {
 
 const NAMESPACE_COLORS = [
     '#2B6CB0', '#38A169', '#D69E2E', '#9F7AEA',
-    '#ED64A6', '#DD6B20', '#319795', '#E53E3E',
+    '#ED64A6', '#DD6B20', '#319795', '#4299E1',
+    '#68D391', '#B794F4', '#F6AD55', '#4FD1C5',
 ];
 
 const EXTERNAL_COLOR = '#718096';
@@ -613,7 +614,7 @@ const TopologyGraph: React.FC<Props> = ({
                                         {isCollapsed ? '▸' : '▾'} {ns}
                                         {isCollapsed && (
                                             <tspan fill='#A0AEC0' fontWeight='normal'>
-                                                {' '}({nsNodes.length === 1 ? '1 workload' : `collapsed`})
+                                                {' '}({rawGraph.nodes.filter((n) => n.namespace === ns).length} workloads)
                                             </tspan>
                                         )}
                                     </text>
