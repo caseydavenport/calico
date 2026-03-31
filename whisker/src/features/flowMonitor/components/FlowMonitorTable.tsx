@@ -17,12 +17,12 @@ const ACTION_COLORS: Record<string, string> = {
 };
 
 const ACTION_BG: Record<string, string> = {
-    Allow: 'rgba(56, 161, 105, 0.08)',
-    Deny: 'rgba(229, 62, 62, 0.1)',
-    Pass: 'rgba(49, 130, 206, 0.06)',
+    Allow: 'rgba(56, 161, 105, 0.15)',
+    Deny: 'rgba(229, 62, 62, 0.18)',
+    Pass: 'rgba(49, 130, 206, 0.12)',
 };
 
-const STALE_BG = 'rgba(255, 255, 255, 0.02)';
+const STALE_BG = 'rgba(255, 255, 255, 0.015)';
 
 const formatBytes = (b: number): string => {
     if (b < 1024) return `${b} B`;
@@ -162,25 +162,26 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
         setNow(Date.now());
     }, [flows]);
 
-    // Sort: active flows first (sorted by bytes desc), stale flows at bottom (sorted by lastSeen desc)
-    const sortedFlows = React.useMemo(() => {
-        const all = Array.from(flowMapRef.current.values());
-        const active: MonitoredFlow[] = [];
-        const stale: MonitoredFlow[] = [];
+    // Stable sort: only re-sort when the flow map changes (new/removed flows),
+    // not on every tick. Staleness is applied visually per-row without re-ordering.
+    const [sortGeneration, setSortGeneration] = React.useState(0);
+    const prevFlowCountRef = React.useRef(0);
 
-        for (const f of all) {
-            if (now - f.lastSeen > STALE_THRESHOLD_MS) {
-                stale.push(f);
-            } else {
-                active.push(f);
-            }
+    React.useEffect(() => {
+        const count = flowMapRef.current.size;
+        if (count !== prevFlowCountRef.current) {
+            prevFlowCountRef.current = count;
+            setSortGeneration((g) => g + 1);
         }
+    }, [flows]);
 
-        active.sort((a, b) => (b.bytesIn + b.bytesOut) - (a.bytesIn + a.bytesOut));
-        stale.sort((a, b) => b.lastSeen - a.lastSeen);
-
-        return [...active, ...stale];
-    }, [now, flows]);
+    const sortedFlows = React.useMemo(() => {
+        void sortGeneration; // dependency trigger
+        const all = Array.from(flowMapRef.current.values());
+        // Sort by bytes descending — this order stays stable between refreshes
+        all.sort((a, b) => (b.bytesIn + b.bytesOut) - (a.bytesIn + a.bytesOut));
+        return all;
+    }, [sortGeneration]);
 
     const formatAge = (lastSeen: number) => {
         const secs = Math.round((now - lastSeen) / 1000);
@@ -194,16 +195,16 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
             <Table size='sm' variant='unstyled'>
                 <Thead position='sticky' top={0} bg='gray.900' zIndex={2}>
                     <Tr>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none'>Action</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none'>Source</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none'>Destination</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none'>Proto</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none'>Port</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none' isNumeric>Bytes</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none' isNumeric>Packets</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none'>Egress Policies</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none'>Ingress Policies</Th>
-                        <Th color='gray.500' fontSize='10px' px={2} py={2} fontFamily='monospace' textTransform='none'>Last Seen</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none'>Action</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none'>Source</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none'>Destination</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none'>Proto</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none'>Port</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none' isNumeric>Bytes</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none' isNumeric>Packets</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none'>Egress Policies</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none'>Ingress Policies</Th>
+                        <Th color='gray.500' fontSize='xs' px={3} py={2} fontFamily='monospace' textTransform='none'>Last Seen</Th>
                     </Tr>
                 </Thead>
                 <Tbody>
@@ -221,15 +222,15 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                 _hover={{ bg: isStale ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.05)' }}
                                 transition='background 0.3s ease'
                             >
-                                <Td px={2} py={1.5}>
+                                <Td px={3} py={2}>
                                     <Flex align='center' gap={1.5}>
                                         <Box
-                                            w='8px' h='8px' borderRadius='full'
+                                            w='10px' h='10px' borderRadius='full'
                                             bg={isStale ? 'gray.600' : actionColor}
                                             transition='background 0.3s ease'
                                         />
                                         <Text
-                                            fontSize='xs' fontFamily='monospace' fontWeight='bold'
+                                            fontSize='sm' fontFamily='monospace' fontWeight='bold'
                                             color={isStale ? 'gray.600' : actionColor}
                                             transition='color 0.3s ease'
                                         >
@@ -237,55 +238,55 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                         </Text>
                                     </Flex>
                                 </Td>
-                                <Td px={2} py={1.5}>
-                                    <Text fontSize='xs' fontFamily='monospace' color={nameColor} fontWeight='600'>
+                                <Td px={3} py={2}>
+                                    <Text fontSize='sm' fontFamily='monospace' color={nameColor} fontWeight='600'>
                                         {cleanName(f.sourceName)}
                                     </Text>
-                                    <Text fontSize='10px' fontFamily='monospace' color='gray.600'>
+                                    <Text fontSize='xs' fontFamily='monospace' color='gray.600'>
                                         {f.sourceNamespace}
                                     </Text>
                                 </Td>
-                                <Td px={2} py={1.5}>
-                                    <Text fontSize='xs' fontFamily='monospace' color={nameColor} fontWeight='600'>
+                                <Td px={3} py={2}>
+                                    <Text fontSize='sm' fontFamily='monospace' color={nameColor} fontWeight='600'>
                                         {cleanName(f.destName)}
                                     </Text>
-                                    <Text fontSize='10px' fontFamily='monospace' color='gray.600'>
+                                    <Text fontSize='xs' fontFamily='monospace' color='gray.600'>
                                         {f.destNamespace}
                                     </Text>
                                 </Td>
-                                <Td px={2} py={1.5}>
-                                    <Text fontSize='xs' fontFamily='monospace' color={textColor}>
+                                <Td px={3} py={2}>
+                                    <Text fontSize='sm' fontFamily='monospace' color={textColor}>
                                         {f.protocol}
                                     </Text>
                                 </Td>
-                                <Td px={2} py={1.5}>
-                                    <Text fontSize='xs' fontFamily='monospace' color={textColor}>
+                                <Td px={3} py={2}>
+                                    <Text fontSize='sm' fontFamily='monospace' color={textColor}>
                                         {f.destPort}
                                     </Text>
                                 </Td>
-                                <Td px={2} py={1.5} isNumeric>
-                                    <Text fontSize='xs' fontFamily='monospace' color={textColor}>
+                                <Td px={3} py={2} isNumeric>
+                                    <Text fontSize='sm' fontFamily='monospace' color={textColor}>
                                         {formatBytes(f.bytesIn + f.bytesOut)}
                                     </Text>
                                 </Td>
-                                <Td px={2} py={1.5} isNumeric>
-                                    <Text fontSize='xs' fontFamily='monospace' color={textColor}>
+                                <Td px={3} py={2} isNumeric>
+                                    <Text fontSize='sm' fontFamily='monospace' color={textColor}>
                                         {(f.packetsIn + f.packetsOut).toLocaleString()}
                                     </Text>
                                 </Td>
-                                <Td px={2} py={1.5} maxW='250px'>
-                                    <Text fontSize='10px' fontFamily='monospace' color={textColor} noOfLines={1}>
+                                <Td px={3} py={2} maxW='250px'>
+                                    <Text fontSize='xs' fontFamily='monospace' color={textColor} noOfLines={1}>
                                         {f.egressPolicies}
                                     </Text>
                                 </Td>
-                                <Td px={2} py={1.5} maxW='250px'>
-                                    <Text fontSize='10px' fontFamily='monospace' color={textColor} noOfLines={1}>
+                                <Td px={3} py={2} maxW='250px'>
+                                    <Text fontSize='xs' fontFamily='monospace' color={textColor} noOfLines={1}>
                                         {f.ingressPolicies}
                                     </Text>
                                 </Td>
-                                <Td px={2} py={1.5}>
+                                <Td px={3} py={2}>
                                     <Text
-                                        fontSize='10px' fontFamily='monospace'
+                                        fontSize='xs' fontFamily='monospace'
                                         color={isStale ? 'gray.600' : 'gray.400'}
                                     >
                                         {formatAge(f.lastSeen)}
