@@ -62,7 +62,9 @@ const TopologyGraph: React.FC<Props> = ({
     const [collapsedNs, setCollapsedNs] = React.useState(new Set<string>());
     const simulationRef = React.useRef<d3.Simulation<SimNode, SimEdge>>();
     const dragRef = React.useRef<{
-        ns: string;
+        type: 'ns' | 'node';
+        ns?: string;
+        nodeId?: string;
         startX: number;
         startY: number;
         nodeStarts: Map<string, { x: number; y: number }>;
@@ -338,30 +340,51 @@ const TopologyGraph: React.FC<Props> = ({
         // Namespace drag handlers
         const handlePointerDown = (e: PointerEvent) => {
             const target = e.target as SVGElement;
+
+            // Check for namespace hull drag
             const nsEl = target.closest('[data-ns-drag]');
-            if (!nsEl) return;
-            const ns = nsEl.getAttribute('data-ns-drag')!;
+            // Check for individual node drag
+            const nodeEl = target.closest('[data-node-id]');
 
-            // Collect starting positions of all nodes in this namespace
-            const nodeStarts = new Map<string, { x: number; y: number }>();
-            for (const [id, pos] of prevNodesRef.current) {
-                if (id.startsWith(`${ns}/`) || id.startsWith(`_group_/${ns}`)) {
-                    nodeStarts.set(id, { ...pos });
-                }
-            }
+            if (!nsEl && !nodeEl) return;
 
-            // Transform pointer to SVG coordinates
             const pt = svg.createSVGPoint();
             pt.x = e.clientX;
             pt.y = e.clientY;
             const svgPt = pt.matrixTransform(svg.getScreenCTM()!.inverse());
 
-            dragRef.current = {
-                ns,
-                startX: svgPt.x,
-                startY: svgPt.y,
-                nodeStarts,
-            };
+            const nodeStarts = new Map<string, { x: number; y: number }>();
+
+            if (nodeEl && !nsEl) {
+                // Single node drag (for external nodes or individual workloads)
+                const nodeId = nodeEl.getAttribute('data-node-id')!;
+                const pos = prevNodesRef.current.get(nodeId);
+                if (pos) nodeStarts.set(nodeId, { ...pos });
+
+                dragRef.current = {
+                    type: 'node',
+                    nodeId,
+                    startX: svgPt.x,
+                    startY: svgPt.y,
+                    nodeStarts,
+                };
+            } else if (nsEl) {
+                // Namespace group drag
+                const ns = nsEl.getAttribute('data-ns-drag')!;
+                for (const [id, pos] of prevNodesRef.current) {
+                    if (id.startsWith(`${ns}/`) || id.startsWith(`_group_/${ns}`)) {
+                        nodeStarts.set(id, { ...pos });
+                    }
+                }
+
+                dragRef.current = {
+                    type: 'ns',
+                    ns,
+                    startX: svgPt.x,
+                    startY: svgPt.y,
+                    nodeStarts,
+                };
+            }
 
             // Pin all nodes in the namespace
             if (simulationRef.current) {
@@ -493,13 +516,7 @@ const TopologyGraph: React.FC<Props> = ({
     };
 
     // Arrow marker at 60% along edge
-    const arrowPos = (edge: SimEdge) => {
-        const t = 0.6;
-        return {
-            x: edge.source.x! + (edge.target.x! - edge.source.x!) * t,
-            y: edge.source.y! + (edge.target.y! - edge.source.y!) * t,
-        };
-    };
+
 
     return (
         <Box position='relative' h='100%'>
@@ -580,24 +597,45 @@ const TopologyGraph: React.FC<Props> = ({
                             const w = edgeWidth(edge);
                             return (
                                 <g key={edge.id}>
+                                    {/* Base edge */}
                                     <path
                                         d={edgePath(edge)}
                                         fill='none'
                                         stroke={color}
                                         strokeWidth={w}
-                                        strokeOpacity={highlighted ? 0.6 : 0.06}
-                                        strokeDasharray={edge.action === 'Deny' ? '6,3' : undefined}
+                                        strokeOpacity={highlighted ? 0.5 : 0.06}
                                         style={{ transition: 'stroke-opacity 0.2s ease' }}
                                     />
-                                    {/* Direction indicator */}
-                                    <circle
-                                        cx={arrowPos(edge).x}
-                                        cy={arrowPos(edge).y}
-                                        r={Math.max(2, w * 0.6)}
-                                        fill={color}
-                                        opacity={highlighted ? 0.8 : 0.06}
-                                        style={{ transition: 'opacity 0.2s ease' }}
-                                    />
+                                    {/* Animated flow direction overlay */}
+                                    {highlighted && edge.action !== 'Deny' && (
+                                        <path
+                                            d={edgePath(edge)}
+                                            fill='none'
+                                            stroke='rgba(255,255,255,0.4)'
+                                            strokeWidth={Math.max(1.5, w * 0.4)}
+                                            strokeDasharray='4,12'
+                                            strokeLinecap='round'
+                                        >
+                                            <animate
+                                                attributeName='stroke-dashoffset'
+                                                from='16' to='0'
+                                                dur='1s'
+                                                repeatCount='indefinite'
+                                            />
+                                        </path>
+                                    )}
+                                    {/* Deny: static dashed */}
+                                    {edge.action === 'Deny' && (
+                                        <path
+                                            d={edgePath(edge)}
+                                            fill='none'
+                                            stroke={color}
+                                            strokeWidth={w}
+                                            strokeOpacity={highlighted ? 0.4 : 0.04}
+                                            strokeDasharray='6,4'
+                                            style={{ transition: 'stroke-opacity 0.2s ease' }}
+                                        />
+                                    )}
                                 </g>
                             );
                         })}
@@ -714,18 +752,41 @@ const TopologyGraph: React.FC<Props> = ({
                 </Flex>
             </Flex>
 
-            {/* Namespace legend */}
+            {/* Namespace legend with collapse/expand controls */}
             <Flex
                 position='absolute' top={4} right={4}
                 bg='rgba(26, 32, 44, 0.9)' borderRadius='md'
                 px={3} py={2} gap={2} flexDirection='column'
                 fontSize='xs' color='gray.300' fontFamily='monospace'
             >
-                <Text color='gray.500' fontWeight='bold' fontSize='10px'>NAMESPACES</Text>
+                <Flex justify='space-between' align='center'>
+                    <Text color='gray.500' fontWeight='bold' fontSize='10px'>NAMESPACES</Text>
+                    <Flex gap={2}>
+                        <Text
+                            color='gray.500' fontSize='10px' cursor='pointer'
+                            _hover={{ color: 'gray.300' }}
+                            onClick={() => setCollapsedNs(new Set(Array.from(nsColors.keys())))}
+                        >
+                            collapse all
+                        </Text>
+                        <Text
+                            color='gray.500' fontSize='10px' cursor='pointer'
+                            _hover={{ color: 'gray.300' }}
+                            onClick={() => setCollapsedNs(new Set())}
+                        >
+                            expand all
+                        </Text>
+                    </Flex>
+                </Flex>
                 {Array.from(nsColors.entries()).map(([ns, color]) => (
-                    <Flex key={ns} align='center' gap={1.5}>
+                    <Flex
+                        key={ns} align='center' gap={1.5}
+                        cursor='pointer'
+                        onClick={() => toggleNsCollapse(ns)}
+                        _hover={{ color: 'white' }}
+                    >
                         <Box w='8px' h='8px' borderRadius='full' bg={color} />
-                        <Text>{ns}</Text>
+                        <Text>{collapsedNs.has(ns) ? '▸' : '▾'} {ns}</Text>
                     </Flex>
                 ))}
             </Flex>
