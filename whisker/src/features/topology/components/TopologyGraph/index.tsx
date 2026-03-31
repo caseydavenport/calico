@@ -73,8 +73,41 @@ const TopologyGraph: React.FC<Props> = ({
     const toggleNsCollapse = React.useCallback((ns: string) => {
         setCollapsedNs((prev) => {
             const next = new Set(prev);
-            if (next.has(ns)) next.delete(ns);
-            else next.add(ns);
+            if (next.has(ns)) {
+                // Expanding: set each node's position near the group node
+                const groupPos = prevNodesRef.current.get(`_group_/${ns}`);
+                if (groupPos) {
+                    // Spread nodes around the group centroid
+                    let i = 0;
+                    for (const [id] of prevNodesRef.current) {
+                        if (id.startsWith(`${ns}/`)) {
+                            prevNodesRef.current.set(id, {
+                                x: groupPos.x + (Math.cos(i * 1.2) * 40),
+                                y: groupPos.y + (Math.sin(i * 1.2) * 40),
+                            });
+                            i++;
+                        }
+                    }
+                }
+                next.delete(ns);
+            } else {
+                // Collapsing: compute centroid and save as group position
+                let cx = 0, cy = 0, count = 0;
+                for (const [id, pos] of prevNodesRef.current) {
+                    if (id.startsWith(`${ns}/`)) {
+                        cx += pos.x;
+                        cy += pos.y;
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    prevNodesRef.current.set(`_group_/${ns}`, {
+                        x: cx / count,
+                        y: cy / count,
+                    });
+                }
+                next.add(ns);
+            }
             return next;
         });
     }, []);
@@ -275,7 +308,7 @@ const TopologyGraph: React.FC<Props> = ({
             .force('collision', d3.forceCollide().radius(40))
             .force('nsSeparation', nsSeparation)
             // On data refresh, only apply a tiny nudge instead of full reheat
-            .alpha(isFirstRender.current ? 1 : 0.05)
+            .alpha(isFirstRender.current ? 1 : 0.01)
             .alphaDecay(0.03);
 
         simulationRef.current = simulation;
@@ -386,17 +419,6 @@ const TopologyGraph: React.FC<Props> = ({
                 };
             }
 
-            // Pin all nodes in the namespace
-            if (simulationRef.current) {
-                for (const node of simulationRef.current.nodes()) {
-                    if (nodeStarts.has(node.id)) {
-                        node.fx = node.x;
-                        node.fy = node.y;
-                    }
-                }
-                simulationRef.current.alphaTarget(0.1).restart();
-            }
-
             (e.target as Element).setPointerCapture(e.pointerId);
             e.stopPropagation();
         };
@@ -410,19 +432,25 @@ const TopologyGraph: React.FC<Props> = ({
             pt.y = e.clientY;
             const svgPt = pt.matrixTransform(svg.getScreenCTM()!.inverse());
 
-            // Account for current zoom transform
             const k = transformRef.current.k;
             const dx = (svgPt.x - startX) / k;
             const dy = (svgPt.y - startY) / k;
 
+            // Directly move nodes without reheating the simulation
             if (simulationRef.current) {
                 for (const node of simulationRef.current.nodes()) {
                     const start = nodeStarts.get(node.id);
                     if (start) {
-                        node.fx = start.x + dx;
-                        node.fy = start.y + dy;
+                        node.x = start.x + dx;
+                        node.y = start.y + dy;
+                        // Pin so simulation doesn't fight us
+                        node.fx = node.x;
+                        node.fy = node.y;
+                        prevNodesRef.current.set(node.id, { x: node.x, y: node.y });
                     }
                 }
+                // Update display without reheating
+                setNodes([...simulationRef.current.nodes()]);
             }
         };
 
@@ -430,16 +458,16 @@ const TopologyGraph: React.FC<Props> = ({
             if (!dragRef.current) return;
             const { nodeStarts } = dragRef.current;
 
-            // Unpin nodes, save new positions
+            // Keep nodes pinned at their new positions — no settling
             if (simulationRef.current) {
                 for (const node of simulationRef.current.nodes()) {
                     if (nodeStarts.has(node.id)) {
                         prevNodesRef.current.set(node.id, { x: node.x!, y: node.y! });
-                        node.fx = undefined;
-                        node.fy = undefined;
+                        // Leave pinned so nothing moves
+                        node.fx = node.x;
+                        node.fy = node.y;
                     }
                 }
-                simulationRef.current.alphaTarget(0);
             }
 
             dragRef.current = null;
