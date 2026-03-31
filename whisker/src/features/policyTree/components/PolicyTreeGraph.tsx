@@ -180,8 +180,28 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
         }
     }
 
-    // Build DAG nodes: each unique policy step at each depth is one node
-    // Key: "depth:stepId"
+    // Build tier ordering: collect unique tiers in the order they appear
+    // across all traces. This determines column assignment.
+    const tierOrder: string[] = [];
+    const tierSet = new Set<string>();
+    for (const path of paths) {
+        for (const stepId of path.stepIds) {
+            const step = stepMap.get(stepId);
+            if (!step) continue;
+            const tier = step.tier || '_profile_';
+            // EndOfTier uses the same column as its tier
+            const effectiveTier = step.kind === 'EndOfTier' ? (step.tier || '_default_') : tier;
+            if (!tierSet.has(effectiveTier)) {
+                tierSet.add(effectiveTier);
+                tierOrder.push(effectiveTier);
+            }
+        }
+    }
+    const tierColMap = new Map<string, number>();
+    tierOrder.forEach((t, i) => tierColMap.set(t, i));
+
+    // Build DAG nodes: each unique policy step is one node, column = tier
+    // Key: stepId (unique per policy, shared across traces)
     const dagNodes = new Map<string, DAGNode>();
     const dagEdges: DAGEdge[] = [];
     const edgeSet = new Set<string>();
@@ -191,15 +211,18 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
 
         for (let i = 0; i < path.stepIds.length; i++) {
             const stepId = path.stepIds[i];
-            const nodeKey = `${i}:${stepId}`;
+            const nodeKey = stepId; // shared across traces!
             const step = stepMap.get(stepId);
             if (!step) continue;
+
+            const tier = step.kind === 'EndOfTier' ? (step.tier || '_default_') : (step.tier || '_profile_');
+            const col = tierColMap.get(tier) ?? i;
 
             if (!dagNodes.has(nodeKey)) {
                 dagNodes.set(nodeKey, {
                     id: nodeKey,
                     step,
-                    col: i,
+                    col,
                     row: 0,
                     flowPaths: [],
                     totalVolume: 0,
@@ -209,7 +232,7 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
             node.flowPaths.push(path);
             node.totalVolume += path.volume;
 
-            if (prevNodeKey) {
+            if (prevNodeKey && prevNodeKey !== nodeKey) {
                 const edgeKey = `${prevNodeKey}→${nodeKey}`;
                 if (!edgeSet.has(edgeKey)) {
                     edgeSet.add(edgeKey);
@@ -221,7 +244,6 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
                         flowCount: 0,
                     });
                 }
-                // Accumulate volume
                 const edge = dagEdges.find((e) => `${e.fromId}→${e.toId}` === edgeKey);
                 if (edge) {
                     edge.volume += path.volume;
@@ -306,13 +328,10 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
         const node = dag.nodes.find((n) => n.id === nodeId);
         if (!node) return null;
 
-        const pathStepSets = node.flowPaths.map((p) =>
-            p.stepIds.map((sid, i) => `${i}:${sid}`),
-        );
         const edgeKeys = new Set<string>();
-        for (const steps of pathStepSets) {
-            for (let i = 0; i < steps.length - 1; i++) {
-                edgeKeys.add(`${steps[i]}→${steps[i + 1]}`);
+        for (const path of node.flowPaths) {
+            for (let i = 0; i < path.stepIds.length - 1; i++) {
+                edgeKeys.add(`${path.stepIds[i]}→${path.stepIds[i + 1]}`);
             }
         }
         return edgeKeys;
@@ -439,7 +458,7 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
 
                         const r = DOT_R + (Math.log(n.totalVolume + 1) / Math.log(maxVol + 1)) * 4;
                         const highlighted = !highlightedEdges ||
-                            n.flowPaths.some((p) => p.stepIds.some((sid, i) => `${i}:${sid}` === n.id));
+                            n.flowPaths.some((p) => p.stepIds.includes(n.id));
 
                         return (
                             <g
