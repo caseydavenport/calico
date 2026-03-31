@@ -260,18 +260,13 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                 _hover={{ bg: isStale ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.05)' }}
                                 transition='background 0.3s ease'
                                 sx={recentlyUpdated ? {
-                                    animation: 'rowPulse 1s ease-out',
-                                    '& td': {
-                                        animation: 'textShimmer 1s ease-out',
-                                    },
-                                    '@keyframes rowPulse': {
-                                        '0%': { background: 'rgba(255, 255, 255, 0.06)' },
-                                        '100%': { background: rowBg },
+                                    '& td *': {
+                                        animation: 'textShimmer 1.2s ease-out',
                                     },
                                     '@keyframes textShimmer': {
-                                        '0%': { textShadow: '0 0 12px rgba(255,255,255,0.8)' },
-                                        '50%': { textShadow: '0 0 4px rgba(255,255,255,0.3)' },
-                                        '100%': { textShadow: 'none' },
+                                        '0%': { color: '#FFF', textShadow: '0 0 10px rgba(255,255,255,0.7)' },
+                                        '40%': { textShadow: '0 0 4px rgba(255,255,255,0.3)' },
+                                        '100%': { color: 'inherit', textShadow: 'none' },
                                     },
                                 } : undefined}
                             >
