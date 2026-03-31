@@ -447,10 +447,11 @@ const TopologyGraph: React.FC<Props> = ({
 
     // Rendering helpers
     const nodeRadius = (node: SimNode) => {
-        const minR = 10;
-        const maxR = 30;
+        const minR = 8;
+        const maxR = 18;
         const maxNodeBytes = Math.max(...nodes.map((n) => n.totalBytes), 1);
-        return minR + (node.totalBytes / maxNodeBytes) * (maxR - minR);
+        const logScale = Math.log(node.totalBytes + 1) / Math.log(maxNodeBytes + 1);
+        return minR + logScale * (maxR - minR);
     };
 
     const edgeWidth = (edge: SimEdge) =>
