@@ -182,11 +182,19 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
 
     // Build tier ordering: collect unique tiers in the order they appear
     // across all traces. This determines column assignment.
-    // Normalize tier: empty string, 'default', and profile all map to '_default_'
+    // Tier normalization:
+    // - Explicit tier policies → their tier's column
+    // - Terminal actions (EndOfTier, Default Allow, explicit Allow/Deny)
+    //   go in '_outcome_' — a final column to the right of all tiers
+    // - This ensures no node-to-node edges within the same column
     const normTier = (step: Step) => {
-        if (step.isTerminal && step.kind === 'Profile') return '_default_';
+        // All terminal actions go in the outcome column
+        if (step.isTerminal) return '_outcome_';
+        // Trigger policies (gray dots, action=N/A) stay in their tier
+        if (step.action === 'N/A') return step.tier || 'default';
+        // Regular policies
         const t = step.tier;
-        if (!t || t === '' || t === 'default' || t === '_profile_') return '_default_';
+        if (!t || t === '') return 'default';
         return t;
     };
 
@@ -203,13 +211,13 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
             }
         }
     }
-    // Ensure _default_ is always last (it's the fallback tier)
-    if (tierSet.has('_default_')) {
-        const idx = tierOrder.indexOf('_default_');
+    // Ensure _outcome_ is always last
+    if (tierSet.has('_outcome_')) {
+        const idx = tierOrder.indexOf('_outcome_');
         if (idx >= 0 && idx < tierOrder.length - 1) {
             tierOrder.splice(idx, 1);
-            tierOrder.push('_default_');
         }
+        tierOrder.push('_outcome_');
     }
     const tierColMap = new Map<string, number>();
     tierOrder.forEach((t, i) => tierColMap.set(t, i));
@@ -355,7 +363,7 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
     const tierCols = React.useMemo(() => {
         const map = new Map<number, string>();
         for (const [tier, col] of dag.tierColMap) {
-            const label = tier === '_default_' ? 'default' : tier;
+            const label = tier === '_outcome_' ? 'outcome' : tier;
             map.set(col, label);
         }
         return map;
