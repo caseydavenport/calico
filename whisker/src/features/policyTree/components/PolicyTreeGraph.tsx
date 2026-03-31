@@ -14,11 +14,9 @@ type Props = {
 };
 
 const ACTION_COLORS: Record<string, string> = {
-    Allow: '#38A169',
-    'Default Allow': '#68D391',
-    Deny: '#E53E3E',
-    'Default Deny': '#FC8181',
-    Pass: '#3182CE',
+    Allow: '#38A169', 'Default Allow': '#68D391',
+    Deny: '#E53E3E', 'Default Deny': '#FC8181',
+    Pass: '#3182CE', 'N/A': '#718096',
 };
 
 const toNum = (v: string | number | undefined): number => {
@@ -33,42 +31,29 @@ const formatBytes = (b: number): string => {
     return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const shortKind = (kind: string) => {
+const shortKind = (kind: string): string => {
     const map: Record<string, string> = {
-        CalicoNetworkPolicy: 'CNP',
-        GlobalNetworkPolicy: 'GNP',
-        NetworkPolicy: 'KNP',
-        Profile: 'Profile',
+        CalicoNetworkPolicy: 'CNP', GlobalNetworkPolicy: 'GNP',
+        NetworkPolicy: 'KNP', Profile: 'Profile',
     };
     return map[kind] || kind;
 };
 
-// ── Data model ──────────────────────────────────────────────────────
+// ── Normalize a flow's policy trace into steps ──────────────────────
 
-// A normalized policy step in a flow's trace
-type PolicyStep = {
-    id: string;        // unique ID for this policy
-    label: string;     // display label
+type Step = {
+    id: string;
+    label: string;
+    shortLabel: string;
     tier: string;
     action: string;
     kind: string;
-    isTrigger: boolean;
-    isKnsProfile: boolean;
+    isTerminal: boolean;
 };
 
-// A trace is the ordered list of policy steps a flow traverses
-type FlowTrace = {
-    steps: PolicyStep[];
-    terminalAction: string;
-    volume: number;
-    flowCount: number;
-    sourceNames: Set<string>;
-    destNames: Set<string>;
-};
-
-const normalizePolicies = (policies: Policy[]): PolicyStep[] => {
+const normalizeTrace = (policies: Policy[]): Step[] => {
     const sorted = [...policies].sort((a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0));
-    const steps: PolicyStep[] = [];
+    const steps: Step[] = [];
 
     for (const p of sorted) {
         const isKns = p.kind === 'Profile' && p.name.startsWith('kns.');
@@ -78,21 +63,22 @@ const normalizePolicies = (policies: Policy[]): PolicyStep[] => {
             const trigger = p.trigger as Policy;
             steps.push({
                 id: `${trigger.kind}:${trigger.tier || ''}/${trigger.name}`,
-                label: `${shortKind(trigger.kind)}:${trigger.name}`,
+                label: `${shortKind(trigger.kind)}: ${trigger.name}`,
+                shortLabel: trigger.name.replace(/.*\./, ''),
                 tier: trigger.tier || '',
                 action: 'N/A',
                 kind: trigger.kind,
-                isTrigger: true,
-                isKnsProfile: false,
+                isTerminal: false,
             });
+            const act = p.action === 'Deny' ? 'Default Deny' : p.action;
             steps.push({
-                id: `eot:${p.tier || 'default'}`,
-                label: `End of ${p.tier || 'default'}`,
+                id: `eot:${p.tier || 'default'}:${act}`,
+                label: `End of Tier ${p.tier || 'default'}`,
+                shortLabel: `End of ${p.tier || 'default'}`,
                 tier: p.tier || '',
-                action: p.action === 'Deny' ? 'Default Deny' : p.action,
+                action: act,
                 kind: 'EndOfTier',
-                isTrigger: false,
-                isKnsProfile: false,
+                isTerminal: true,
             });
             break;
         }
@@ -100,24 +86,22 @@ const normalizePolicies = (policies: Policy[]): PolicyStep[] => {
         if (isKns) {
             steps.push({
                 id: 'profile:default-allow',
-                label: 'Default Allow',
-                tier: '',
-                action: 'Allow',
-                kind: 'Profile',
-                isTrigger: false,
-                isKnsProfile: true,
+                label: 'Default Allow (Profile)',
+                shortLabel: 'Default Allow',
+                tier: '', action: 'Allow', kind: 'Profile',
+                isTerminal: true,
             });
             break;
         }
 
         steps.push({
             id: `${p.kind}:${p.tier || ''}/${p.namespace ? p.namespace + '/' : ''}${p.name}`,
-            label: `${shortKind(p.kind)}:${p.name}`,
+            label: `${shortKind(p.kind)}: ${p.name}`,
+            shortLabel: p.name.replace(/.*\./, ''),
             tier: p.tier || '',
             action: p.action,
             kind: p.kind,
-            isTrigger: false,
-            isKnsProfile: false,
+            isTerminal: p.action === 'Deny' || p.action === 'Allow',
         });
 
         if (p.action === 'Deny') break;
@@ -126,262 +110,183 @@ const normalizePolicies = (policies: Policy[]): PolicyStep[] => {
     return steps;
 };
 
-// Build unique traces from flows, merging identical policy paths
-const buildTraces = (flows: FlowLog[], metric: 'bytes' | 'packets'): FlowTrace[] => {
-    const map = new Map<string, FlowTrace>();
+// ── Build a DAG of unique policy nodes with flow paths ──────────────
+
+type FlowPath = {
+    stepIds: string[];
+    volume: number;
+    flowCount: number;
+    action: string;
+    sources: Set<string>;
+    dests: Set<string>;
+};
+
+type DAGNode = {
+    id: string;
+    step: Step;
+    col: number;       // column (evaluation depth)
+    row: number;        // assigned during layout
+    flowPaths: FlowPath[];  // paths that pass through this node
+    totalVolume: number;
+};
+
+type DAGEdge = {
+    fromId: string;
+    toId: string;
+    volume: number;
+    action: string;
+    flowCount: number;
+};
+
+const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
+    // First, build unique flow paths
+    const pathMap = new Map<string, FlowPath>();
 
     for (const f of flows) {
         const policies = f.policies?.['enforced'] || [];
-        const steps = normalizePolicies(policies);
-        const key = steps.map((s) => s.id).join('→');
-
+        const steps = normalizeTrace(policies);
+        const stepIds = steps.map((s) => s.id);
+        const key = stepIds.join('→');
         const vol = metric === 'bytes'
             ? toNum(f.bytes_in) + toNum(f.bytes_out)
             : toNum(f.packets_in) + toNum(f.packets_out);
 
-        const last = steps[steps.length - 1];
-        const termAction = last?.action || f.action;
-
-        const existing = map.get(key);
+        const existing = pathMap.get(key);
         if (existing) {
             existing.volume += vol;
             existing.flowCount++;
-            existing.sourceNames.add(`${f.source_namespace}/${f.source_name}`);
-            existing.destNames.add(`${f.dest_namespace}/${f.dest_name}`);
+            existing.sources.add(`${f.source_namespace}/${f.source_name}`);
+            existing.dests.add(`${f.dest_namespace}/${f.dest_name}`);
         } else {
-            map.set(key, {
-                steps,
-                terminalAction: termAction,
+            pathMap.set(key, {
+                stepIds,
                 volume: vol,
                 flowCount: 1,
-                sourceNames: new Set([`${f.source_namespace}/${f.source_name}`]),
-                destNames: new Set([`${f.dest_namespace}/${f.dest_name}`]),
+                action: steps.length > 0 ? steps[steps.length - 1].action : f.action,
+                sources: new Set([`${f.source_namespace}/${f.source_name}`]),
+                dests: new Set([`${f.dest_namespace}/${f.dest_name}`]),
             });
         }
     }
 
-    return Array.from(map.values()).sort((a, b) => b.volume - a.volume);
-};
+    const paths = Array.from(pathMap.values()).sort((a, b) => b.volume - a.volume);
 
-// ── Tree layout ─────────────────────────────────────────────────────
+    // Collect all unique steps across all flows
+    const stepMap = new Map<string, Step>();
+    for (const f of flows) {
+        const policies = f.policies?.['enforced'] || [];
+        for (const step of normalizeTrace(policies)) {
+            if (!stepMap.has(step.id)) stepMap.set(step.id, step);
+        }
+    }
 
-// Build a trie from traces: shared prefixes merge into one path
-type TreeNode = {
-    step: PolicyStep | null;  // null for root
-    children: Map<string, TreeNode>;
-    traces: FlowTrace[];      // traces that pass through this node
-    terminalTraces: FlowTrace[]; // traces that END at this node
-    depth: number;
-    yIndex: number;            // assigned during layout
-};
+    // Build DAG nodes: each unique policy step at each depth is one node
+    // Key: "depth:stepId"
+    const dagNodes = new Map<string, DAGNode>();
+    const dagEdges: DAGEdge[] = [];
+    const edgeSet = new Set<string>();
 
-const buildTree = (traces: FlowTrace[]): TreeNode => {
-    const root: TreeNode = {
-        step: null,
-        children: new Map(),
-        traces: [...traces],
-        terminalTraces: [],
-        depth: 0,
-        yIndex: 0,
-    };
+    for (const path of paths) {
+        let prevNodeKey: string | null = null;
 
-    for (const trace of traces) {
-        let node = root;
-        for (let i = 0; i < trace.steps.length; i++) {
-            const step = trace.steps[i];
-            let child = node.children.get(step.id);
-            if (!child) {
-                child = {
+        for (let i = 0; i < path.stepIds.length; i++) {
+            const stepId = path.stepIds[i];
+            const nodeKey = `${i}:${stepId}`;
+            const step = stepMap.get(stepId);
+            if (!step) continue;
+
+            if (!dagNodes.has(nodeKey)) {
+                dagNodes.set(nodeKey, {
+                    id: nodeKey,
                     step,
-                    children: new Map(),
-                    traces: [],
-                    terminalTraces: [],
-                    depth: i + 1,
-                    yIndex: 0,
-                };
-                node.children.set(step.id, child);
+                    col: i,
+                    row: 0,
+                    flowPaths: [],
+                    totalVolume: 0,
+                });
             }
-            child.traces.push(trace);
-            node = child;
+            const node = dagNodes.get(nodeKey)!;
+            node.flowPaths.push(path);
+            node.totalVolume += path.volume;
 
-            if (i === trace.steps.length - 1) {
-                node.terminalTraces.push(trace);
+            if (prevNodeKey) {
+                const edgeKey = `${prevNodeKey}→${nodeKey}`;
+                if (!edgeSet.has(edgeKey)) {
+                    edgeSet.add(edgeKey);
+                    dagEdges.push({
+                        fromId: prevNodeKey,
+                        toId: nodeKey,
+                        volume: 0,
+                        action: step.action,
+                        flowCount: 0,
+                    });
+                }
+                // Accumulate volume
+                const edge = dagEdges.find((e) => `${e.fromId}→${e.toId}` === edgeKey);
+                if (edge) {
+                    edge.volume += path.volume;
+                    edge.flowCount += path.flowCount;
+                }
             }
+
+            prevNodeKey = nodeKey;
         }
     }
 
-    return root;
-};
-
-// Assign Y indices to leaf nodes, then propagate up
-let nextY = 0;
-const assignYIndices = (node: TreeNode) => {
-    if (node.children.size === 0 || node.terminalTraces.length > 0) {
-        // Leaf or terminal: assign a Y slot
-        if (node.children.size === 0) {
-            node.yIndex = nextY++;
-        } else {
-            // Has both terminal traces and children
-            node.yIndex = nextY++;
-        }
+    // Assign rows: within each column, sort by volume and assign sequential rows
+    const cols = new Map<number, DAGNode[]>();
+    for (const node of dagNodes.values()) {
+        const arr = cols.get(node.col) || [];
+        arr.push(node);
+        cols.set(node.col, arr);
+    }
+    for (const [, colNodes] of cols) {
+        colNodes.sort((a, b) => b.totalVolume - a.totalVolume);
+        colNodes.forEach((n, i) => { n.row = i; });
     }
 
-    const children = Array.from(node.children.values());
-    for (const child of children) {
-        assignYIndices(child);
-    }
+    const maxCol = Math.max(0, ...Array.from(dagNodes.values()).map((n) => n.col));
+    const maxRow = Math.max(0, ...Array.from(dagNodes.values()).map((n) => n.row));
 
-    // Non-leaf: center among children
-    if (node.children.size > 0 && node.terminalTraces.length === 0) {
-        const ys = children.map((c) => c.yIndex);
-        node.yIndex = (Math.min(...ys) + Math.max(...ys)) / 2;
-    }
+    return { nodes: Array.from(dagNodes.values()), edges: dagEdges, maxCol, maxRow, paths };
 };
 
-// ── Rendering ───────────────────────────────────────────────────────
+// ── Component ───────────────────────────────────────────────────────
 
-type RenderedNode = {
-    x: number;
-    y: number;
-    step: PolicyStep;
-    traces: FlowTrace[];
-    terminalTraces: FlowTrace[];
-    isTerminal: boolean;
-};
+const DOT_R = 10;
+const COL_SPACING = 180;
+const ROW_SPACING = 44;
+const LEFT_PAD = 40;
+const TOP_PAD = 50;
 
-type RenderedEdge = {
-    x1: number; y1: number;
-    x2: number; y2: number;
-    volume: number;
-    action: string;
-};
-
-const LANE_H = 32;
-const DOT_R = 8;
-const LEFT_MARGIN = 20;
-const RIGHT_MARGIN = 20;
-const TOP_MARGIN = 40;
-
-const PolicyTreeGraph: React.FC<Props> = ({
-    flows,
-    width,
-    height,
-    metric = 'bytes',
-}) => {
+const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'bytes' }) => {
     const [hoveredNode, setHoveredNode] = React.useState<string | null>(null);
     const [selectedNode, setSelectedNode] = React.useState<string | null>(null);
     const [tooltipContent, setTooltipContent] = React.useState('');
     const [tooltipPos, setTooltipPos] = React.useState({ x: 0, y: 0 });
 
-    const traces = React.useMemo(
-        () => buildTraces(flows, metric),
-        [flows, metric],
-    );
+    const dag = React.useMemo(() => buildDAG(flows, metric), [flows, metric]);
 
-    const { renderedNodes, renderedEdges, svgHeight, maxDepth } = React.useMemo(() => {
-        if (traces.length === 0) return { renderedNodes: [], renderedEdges: [], svgHeight: height, maxDepth: 0 };
+    const svgWidth = Math.max(width, LEFT_PAD + (dag.maxCol + 2) * COL_SPACING);
+    const svgHeight = Math.max(height, TOP_PAD + (dag.maxRow + 2) * ROW_SPACING);
 
-        const tree = buildTree(traces);
-        nextY = 0;
-        assignYIndices(tree);
-        const totalLanes = nextY;
+    const maxVol = Math.max(...dag.nodes.map((n) => n.totalVolume), 1);
+    const maxEdgeVol = Math.max(...dag.edges.map((e) => e.volume), 1);
 
-        const maxD = traces.reduce((m, t) => Math.max(m, t.steps.length), 0);
-        const colWidth = maxD > 0 ? (width - LEFT_MARGIN - RIGHT_MARGIN) / (maxD + 1) : 100;
-        const svgH = Math.max(height, TOP_MARGIN + totalLanes * LANE_H + 20);
-
-        const rNodes: RenderedNode[] = [];
-        const rEdges: RenderedEdge[] = [];
-        const nodePositions = new Map<string, { x: number; y: number }>();
-
-        // Flatten tree to rendered nodes
-        const visit = (node: TreeNode, parentKey: string | null) => {
-            if (!node.step) {
-                // Root: visit children
-                for (const child of node.children.values()) {
-                    visit(child, null);
-                }
-                return;
-            }
-
-            const x = LEFT_MARGIN + node.depth * colWidth;
-            const y = TOP_MARGIN + node.yIndex * LANE_H;
-            const key = `${node.depth}:${node.step.id}`;
-
-            nodePositions.set(key, { x, y });
-
-            rNodes.push({
-                x, y,
-                step: node.step,
-                traces: node.traces,
-                terminalTraces: node.terminalTraces,
-                isTerminal: node.terminalTraces.length > 0,
+    const nodePos = React.useMemo(() => {
+        const map = new Map<string, { x: number; y: number }>();
+        for (const n of dag.nodes) {
+            map.set(n.id, {
+                x: LEFT_PAD + (n.col + 0.5) * COL_SPACING,
+                y: TOP_PAD + n.row * ROW_SPACING + ROW_SPACING / 2,
             });
-
-            // Edge from parent
-            if (parentKey) {
-                const parentPos = nodePositions.get(parentKey);
-                if (parentPos) {
-                    const totalVol = node.traces.reduce((s, t) => s + t.volume, 0);
-                    const action = node.step.action === 'Deny' || node.step.action === 'Default Deny'
-                        ? 'Deny'
-                        : node.traces[0]?.terminalAction || 'Allow';
-                    rEdges.push({
-                        x1: parentPos.x, y1: parentPos.y,
-                        x2: x, y2: y,
-                        volume: totalVol,
-                        action,
-                    });
-                }
-            }
-
-            for (const child of node.children.values()) {
-                visit(child, key);
-            }
-        };
-
-        // Root's children connect from the left edge
-        for (const child of tree.children.values()) {
-            const cx = LEFT_MARGIN + child.depth * colWidth;
-            const cy = TOP_MARGIN + child.yIndex * LANE_H;
-            const key = `${child.depth}:${child.step!.id}`;
-            nodePositions.set(key, { x: cx, y: cy });
-
-            rNodes.push({
-                x: cx, y: cy,
-                step: child.step!,
-                traces: child.traces,
-                terminalTraces: child.terminalTraces,
-                isTerminal: child.terminalTraces.length > 0,
-            });
-
-            // Entry edge from left margin
-            const totalVol = child.traces.reduce((s, t) => s + t.volume, 0);
-            rEdges.push({
-                x1: LEFT_MARGIN - 10, y1: cy,
-                x2: cx, y2: cy,
-                volume: totalVol,
-                action: child.traces[0]?.terminalAction || 'Allow',
-            });
-
-            for (const grandchild of child.children.values()) {
-                visit(grandchild, key);
-            }
         }
+        return map;
+    }, [dag]);
 
-        return { renderedNodes: rNodes, renderedEdges: rEdges, svgHeight: svgH, maxDepth: maxD };
-    }, [traces, width, height, metric]);
+    const selectedDAGNode = dag.nodes.find((n) => n.id === selectedNode);
 
-    const maxVol = React.useMemo(
-        () => Math.max(...renderedEdges.map((e) => e.volume), 1),
-        [renderedEdges],
-    );
-
-    const selectedRNode = renderedNodes.find(
-        (n) => selectedNode === `${n.x}:${n.y}`,
-    );
-
-    if (traces.length === 0) {
+    if (dag.nodes.length === 0) {
         return (
             <Flex align='center' justify='center' h={height} color='gray.500'>
                 <Text fontFamily='monospace'>No policy trace data available.</Text>
@@ -394,41 +299,122 @@ const PolicyTreeGraph: React.FC<Props> = ({
         return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
     };
 
+    // Highlight: when hovering a node, highlight all edges on paths through it
+    const highlightedEdges = React.useMemo(() => {
+        if (!hoveredNode && !selectedNode) return null;
+        const nodeId = hoveredNode || selectedNode;
+        const node = dag.nodes.find((n) => n.id === nodeId);
+        if (!node) return null;
+
+        const pathStepSets = node.flowPaths.map((p) =>
+            p.stepIds.map((sid, i) => `${i}:${sid}`),
+        );
+        const edgeKeys = new Set<string>();
+        for (const steps of pathStepSets) {
+            for (let i = 0; i < steps.length - 1; i++) {
+                edgeKeys.add(`${steps[i]}→${steps[i + 1]}`);
+            }
+        }
+        return edgeKeys;
+    }, [hoveredNode, selectedNode, dag]);
+
+    // Collect unique tiers for column headers
+    const tierCols = React.useMemo(() => {
+        const map = new Map<number, string>();
+        for (const n of dag.nodes) {
+            if (n.step.tier && !map.has(n.col)) {
+                map.set(n.col, n.step.tier);
+            }
+        }
+        return map;
+    }, [dag]);
+
     return (
         <Box position='relative' h='100%'>
-            <Box overflowY='auto' overflowX='auto' h='100%'>
-                <svg width={width} height={svgHeight}>
+            <Box overflowX='auto' overflowY='auto' h='100%'>
+                <svg width={svgWidth} height={svgHeight}>
+                    {/* Column headers (tiers) */}
+                    {Array.from(tierCols.entries()).map(([col, tier]) => (
+                        <text
+                            key={`tier-${col}`}
+                            x={LEFT_PAD + (col + 0.5) * COL_SPACING}
+                            y={20}
+                            textAnchor='middle'
+                            fontSize={10}
+                            fontFamily='monospace'
+                            fontWeight='bold'
+                            fill='#4A5568'
+                        >
+                            {tier}
+                        </text>
+                    ))}
+
                     {/* Column guide lines */}
-                    {Array.from({ length: maxDepth + 1 }, (_, i) => {
-                        const x = LEFT_MARGIN + (i + 1) * ((width - LEFT_MARGIN - RIGHT_MARGIN) / (maxDepth + 1));
+                    {Array.from(tierCols.keys()).map((col) => (
+                        <line
+                            key={`guide-${col}`}
+                            x1={LEFT_PAD + (col + 0.5) * COL_SPACING}
+                            y1={30}
+                            x2={LEFT_PAD + (col + 0.5) * COL_SPACING}
+                            y2={svgHeight}
+                            stroke='#1E2533'
+                            strokeWidth={1}
+                        />
+                    ))}
+
+                    {/* Edges */}
+                    {dag.edges.map((edge) => {
+                        const from = nodePos.get(edge.fromId);
+                        const to = nodePos.get(edge.toId);
+                        if (!from || !to) return null;
+
+                        const w = 2 + (Math.log(edge.volume + 1) / Math.log(maxEdgeVol + 1)) * 10;
+                        const edgeKey = `${edge.fromId}→${edge.toId}`;
+                        const isHighlighted = !highlightedEdges || highlightedEdges.has(edgeKey);
+                        const isDeny = edge.action === 'Deny' || edge.action === 'Default Deny';
+                        const color = isDeny ? ACTION_COLORS.Deny : ACTION_COLORS.Pass;
+
                         return (
-                            <line
-                                key={`guide-${i}`}
-                                x1={x} y1={TOP_MARGIN - 10}
-                                x2={x} y2={svgHeight}
-                                stroke='#1E2533'
-                                strokeWidth={1}
-                            />
+                            <g key={edgeKey}>
+                                <path
+                                    d={curvedLink(from.x + DOT_R, from.y, to.x - DOT_R, to.y)}
+                                    fill='none'
+                                    stroke={color}
+                                    strokeWidth={w}
+                                    strokeOpacity={isHighlighted ? 0.5 : 0.06}
+                                    strokeLinecap='round'
+                                    style={{ transition: 'stroke-opacity 0.15s ease' }}
+                                />
+                                {/* Animated direction on highlighted edges */}
+                                {isHighlighted && !isDeny && (
+                                    <path
+                                        d={curvedLink(from.x + DOT_R, from.y, to.x - DOT_R, to.y)}
+                                        fill='none'
+                                        stroke='rgba(255,255,255,0.3)'
+                                        strokeWidth={Math.max(1.5, w * 0.3)}
+                                        strokeDasharray='4,12'
+                                        strokeLinecap='round'
+                                    >
+                                        <animate attributeName='stroke-dashoffset' from='16' to='0' dur='1s' repeatCount='indefinite' />
+                                    </path>
+                                )}
+                            </g>
                         );
                     })}
 
-                    {/* Edges */}
-                    {renderedEdges.map((edge, i) => {
-                        const w = 2 + (Math.log(edge.volume + 1) / Math.log(maxVol + 1)) * 8;
-                        const color = ACTION_COLORS[edge.action] || '#4A5568';
-                        const isRelated = !hoveredNode || renderedNodes.some(
-                            (n) => `${n.x}:${n.y}` === hoveredNode &&
-                                   ((Math.abs(n.x - edge.x1) < 1 && Math.abs(n.y - edge.y1) < 1) ||
-                                    (Math.abs(n.x - edge.x2) < 1 && Math.abs(n.y - edge.y2) < 1)),
-                        );
+                    {/* Entry lines (from left edge to first column nodes) */}
+                    {dag.nodes.filter((n) => n.col === 0).map((n) => {
+                        const pos = nodePos.get(n.id);
+                        if (!pos) return null;
+                        const w = 2 + (Math.log(n.totalVolume + 1) / Math.log(maxVol + 1)) * 10;
                         return (
-                            <path
-                                key={`edge-${i}`}
-                                d={curvedLink(edge.x1, edge.y1, edge.x2, edge.y2)}
-                                fill='none'
-                                stroke={color}
+                            <line
+                                key={`entry-${n.id}`}
+                                x1={10} y1={pos.y}
+                                x2={pos.x - DOT_R} y2={pos.y}
+                                stroke='#4A5568'
                                 strokeWidth={w}
-                                strokeOpacity={isRelated ? 0.5 : 0.08}
+                                strokeOpacity={!highlightedEdges ? 0.3 : 0.06}
                                 strokeLinecap='round'
                                 style={{ transition: 'stroke-opacity 0.15s ease' }}
                             />
@@ -436,83 +422,84 @@ const PolicyTreeGraph: React.FC<Props> = ({
                     })}
 
                     {/* Nodes */}
-                    {renderedNodes.map((rn) => {
-                        const key = `${rn.x}:${rn.y}`;
-                        const isHovered = hoveredNode === key;
-                        const isSelected = selectedNode === key;
-                        const step = rn.step;
+                    {dag.nodes.map((n) => {
+                        const pos = nodePos.get(n.id);
+                        if (!pos) return null;
+                        const isHovered = hoveredNode === n.id;
+                        const isSelected = selectedNode === n.id;
+                        const step = n.step;
 
-                        // Color by action
-                        const color = step.isTrigger
-                            ? '#718096'
-                            : step.isKnsProfile
-                              ? ACTION_COLORS['Default Allow']
-                              : step.kind === 'EndOfTier'
-                                ? ACTION_COLORS[step.action] || '#718096'
+                        const color = step.kind === 'EndOfTier'
+                            ? ACTION_COLORS[step.action] || '#718096'
+                            : step.isTerminal
+                              ? ACTION_COLORS[step.action] || '#38A169'
+                              : step.action === 'N/A'
+                                ? '#718096'
                                 : ACTION_COLORS[step.action] || '#3182CE';
+
+                        const r = DOT_R + (Math.log(n.totalVolume + 1) / Math.log(maxVol + 1)) * 4;
+                        const highlighted = !highlightedEdges ||
+                            n.flowPaths.some((p) => p.stepIds.some((sid, i) => `${i}:${sid}` === n.id));
 
                         return (
                             <g
-                                key={key}
+                                key={n.id}
                                 style={{ cursor: 'pointer' }}
-                                onClick={() => setSelectedNode(isSelected ? null : key)}
+                                onClick={() => setSelectedNode(isSelected ? null : n.id)}
                                 onMouseEnter={(e) => {
-                                    setHoveredNode(key);
+                                    setHoveredNode(n.id);
                                     setTooltipContent(
-                                        `${step.label}\n${step.tier ? `Tier: ${step.tier}` : ''}\nAction: ${step.action}\n${rn.traces.length} flows · ${formatBytes(rn.traces.reduce((s, t) => s + t.volume, 0))}`,
+                                        `${step.label}\n${step.tier ? `Tier: ${step.tier}\n` : ''}Action: ${step.action}\n${n.flowPaths.length} unique traces · ${formatBytes(n.totalVolume)}`,
                                     );
                                     setTooltipPos({ x: e.clientX, y: e.clientY });
                                 }}
-                                onMouseLeave={() => {
-                                    setHoveredNode(null);
-                                    setTooltipContent('');
-                                }}
+                                onMouseLeave={() => { setHoveredNode(null); setTooltipContent(''); }}
                             >
-                                {/* Terminal nodes: larger with border */}
                                 <circle
-                                    cx={rn.x} cy={rn.y}
-                                    r={rn.isTerminal ? DOT_R + 2 : DOT_R}
+                                    cx={pos.x} cy={pos.y} r={r}
                                     fill={color}
-                                    stroke={isSelected ? '#FFF' : isHovered ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.15)'}
+                                    stroke={isSelected ? '#FFF' : isHovered ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.15)'}
                                     strokeWidth={isSelected ? 2.5 : isHovered ? 2 : 1}
-                                    style={{ transition: 'stroke 0.15s ease' }}
+                                    opacity={highlighted ? 1 : 0.15}
+                                    style={{ transition: 'opacity 0.15s ease, stroke 0.15s ease' }}
                                 />
-                                {/* Terminal action label */}
-                                {rn.isTerminal && (
+                                {/* Always show short label */}
+                                <text
+                                    x={pos.x} y={pos.y + r + 14}
+                                    textAnchor='middle'
+                                    fontSize={10}
+                                    fontFamily='monospace'
+                                    fill={highlighted ? '#CBD5E0' : '#2D3748'}
+                                    fontWeight={isSelected ? 'bold' : 'normal'}
+                                    style={{ transition: 'fill 0.15s ease' }}
+                                >
+                                    {step.shortLabel}
+                                </text>
+                                {/* Action label for terminal nodes */}
+                                {step.isTerminal && (
                                     <text
-                                        x={rn.x + DOT_R + 8} y={rn.y}
-                                        dy='0.35em'
-                                        fontSize={10}
+                                        x={pos.x} y={pos.y - r - 6}
+                                        textAnchor='middle'
+                                        fontSize={9}
                                         fontFamily='monospace'
                                         fontWeight='bold'
                                         fill={color}
+                                        opacity={highlighted ? 1 : 0.15}
+                                        style={{ transition: 'opacity 0.15s ease' }}
                                     >
-                                        {rn.terminalTraces[0]?.terminalAction}
+                                        {step.action}
                                     </text>
                                 )}
-                                {/* Policy name: show on hover or if zoomed in enough */}
-                                {(isHovered || isSelected) && (
+                                {/* Flow count */}
+                                {n.flowPaths.length > 1 && (
                                     <text
-                                        x={rn.x} y={rn.y - DOT_R - 6}
-                                        textAnchor='middle'
-                                        fontSize={10}
-                                        fontFamily='monospace'
-                                        fill='#E2E8F0'
-                                        fontWeight={isSelected ? 'bold' : 'normal'}
-                                    >
-                                        {step.label}
-                                    </text>
-                                )}
-                                {/* Flow count badge */}
-                                {rn.traces.length > 1 && (
-                                    <text
-                                        x={rn.x} y={rn.y + DOT_R + 14}
+                                        x={pos.x} y={pos.y + r + 25}
                                         textAnchor='middle'
                                         fontSize={8}
                                         fontFamily='monospace'
-                                        fill='#718096'
+                                        fill='#4A5568'
                                     >
-                                        {rn.traces.length} flows
+                                        {n.flowPaths.reduce((s, p) => s + p.flowCount, 0)} flows
                                     </text>
                                 )}
                             </g>
@@ -536,76 +523,61 @@ const PolicyTreeGraph: React.FC<Props> = ({
 
             {/* Detail panel */}
             <AnimatePresence>
-                {selectedRNode && (
+                {selectedDAGNode && (
                     <MotionBox
                         position='fixed' bottom={0} left={0} right={0}
                         bg='gray.800' borderTop='1px solid' borderColor='gray.600'
                         p={5} maxH='35vh' overflowY='auto'
-                        initial={{ y: '100%' }}
-                        animate={{ y: 0 }}
-                        exit={{ y: '100%' }}
+                        initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
                         transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-                        boxShadow='0 -8px 30px rgba(0,0,0,0.5)'
-                        zIndex={100}
+                        boxShadow='0 -8px 30px rgba(0,0,0,0.5)' zIndex={100}
                     >
                         <Flex justify='space-between' align='center' mb={3}>
                             <Box>
                                 <Text color='white' fontWeight='bold' fontSize='md' fontFamily='monospace'>
-                                    {selectedRNode.step.label}
-                                    {selectedRNode.step.tier && (
+                                    {selectedDAGNode.step.label}
+                                    {selectedDAGNode.step.tier && (
                                         <Text as='span' color='gray.400' fontWeight='normal' ml={2}>
-                                            tier: {selectedRNode.step.tier}
+                                            tier: {selectedDAGNode.step.tier}
                                         </Text>
                                     )}
                                 </Text>
                                 <Flex gap={4} mt={1} fontSize='sm' color='gray.400' fontFamily='monospace'>
-                                    <Text>{selectedRNode.traces.length} flows</Text>
-                                    <Text>
-                                        {formatBytes(selectedRNode.traces.reduce((s, t) => s + t.volume, 0))}
-                                    </Text>
-                                    <Text
-                                        color={ACTION_COLORS[selectedRNode.step.action] || 'gray.400'}
-                                        fontWeight='bold'
-                                    >
-                                        {selectedRNode.step.action}
+                                    <Text>{selectedDAGNode.flowPaths.reduce((s, p) => s + p.flowCount, 0)} flows</Text>
+                                    <Text>{formatBytes(selectedDAGNode.totalVolume)}</Text>
+                                    <Text color={ACTION_COLORS[selectedDAGNode.step.action] || 'gray.400'} fontWeight='bold'>
+                                        {selectedDAGNode.step.action}
                                     </Text>
                                 </Flex>
                             </Box>
-                            <Text
-                                color='gray.500' fontSize='sm' cursor='pointer'
-                                onClick={() => setSelectedNode(null)}
-                                _hover={{ color: 'white' }} px={2}
-                            >
-                                ✕
-                            </Text>
+                            <Text color='gray.500' fontSize='sm' cursor='pointer'
+                                onClick={() => setSelectedNode(null)} _hover={{ color: 'white' }} px={2}>✕</Text>
                         </Flex>
 
                         <Text fontSize='xs' color='gray.500' fontWeight='bold' mb={2} fontFamily='monospace'>
-                            FLOWS THROUGH THIS POLICY
+                            FLOW PATHS THROUGH THIS POLICY
                         </Text>
                         <Table size='sm' variant='unstyled'>
                             <Tbody>
-                                {selectedRNode.traces.map((trace, i) => (
+                                {selectedDAGNode.flowPaths.map((path, i) => (
                                     <Tr key={i} _hover={{ bg: 'rgba(255,255,255,0.03)' }}>
-                                        <Td px={2} py={1} fontSize='xs' fontFamily='monospace' color='gray.300'>
-                                            {Array.from(trace.sourceNames).map((s) => s.split('/').pop()).join(', ')}
+                                        <Td px={2} py={1.5} fontSize='xs' fontFamily='monospace' color='gray.300' maxW='200px'>
+                                            {Array.from(path.sources).map((s) => s.split('/').pop()).join(', ')}
                                         </Td>
-                                        <Td px={2} py={1} fontSize='xs' fontFamily='monospace' color='gray.500'>
-                                            →
+                                        <Td px={1} py={1.5} fontSize='xs' fontFamily='monospace' color='gray.500'>→</Td>
+                                        <Td px={2} py={1.5} fontSize='xs' fontFamily='monospace' color='gray.300' maxW='200px'>
+                                            {Array.from(path.dests).map((s) => s.split('/').pop()).join(', ')}
                                         </Td>
-                                        <Td px={2} py={1} fontSize='xs' fontFamily='monospace' color='gray.300'>
-                                            {Array.from(trace.destNames).map((s) => s.split('/').pop()).join(', ')}
-                                        </Td>
-                                        <Td px={2} py={1} fontSize='xs' fontFamily='monospace'>
-                                            <Text color={ACTION_COLORS[trace.terminalAction] || 'gray.400'} fontWeight='bold'>
-                                                {trace.terminalAction}
+                                        <Td px={2} py={1.5} fontSize='xs' fontFamily='monospace'>
+                                            <Text color={ACTION_COLORS[path.action] || 'gray.400'} fontWeight='bold'>
+                                                {path.action}
                                             </Text>
                                         </Td>
-                                        <Td px={2} py={1} fontSize='xs' fontFamily='monospace' color='gray.400' isNumeric>
-                                            {formatBytes(trace.volume)}
+                                        <Td px={2} py={1.5} fontSize='xs' fontFamily='monospace' color='gray.400' isNumeric>
+                                            {formatBytes(path.volume)}
                                         </Td>
-                                        <Td px={2} py={1} fontSize='xs' fontFamily='monospace' color='gray.500' isNumeric>
-                                            {trace.flowCount} flows
+                                        <Td px={2} py={1.5} fontSize='xs' fontFamily='monospace' color='gray.500' isNumeric>
+                                            {path.flowCount}x
                                         </Td>
                                     </Tr>
                                 ))}
