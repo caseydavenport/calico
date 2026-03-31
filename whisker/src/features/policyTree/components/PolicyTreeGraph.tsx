@@ -255,18 +255,22 @@ const buildDAG = (flows: FlowLog[], metric: 'bytes' | 'packets') => {
             node.totalVolume += path.volume;
 
             if (prevNodeKey && prevNodeKey !== nodeKey) {
-                const edgeKey = `${prevNodeKey}→${nodeKey}`;
+                // Key edges by from→to AND terminal action so edges with
+                // different outcomes are visually separate
+                const edgeKey = `${prevNodeKey}→${nodeKey}:${path.action}`;
                 if (!edgeSet.has(edgeKey)) {
                     edgeSet.add(edgeKey);
                     dagEdges.push({
                         fromId: prevNodeKey,
                         toId: nodeKey,
                         volume: 0,
-                        action: step.action,
+                        action: path.action, // terminal action of the flow
                         flowCount: 0,
                     });
                 }
-                const edge = dagEdges.find((e) => `${e.fromId}→${e.toId}` === edgeKey);
+                const edge = dagEdges.find((e) =>
+                    e.fromId === prevNodeKey && e.toId === nodeKey && e.action === path.action,
+                );
                 if (edge) {
                     edge.volume += path.volume;
                     edge.flowCount += path.flowCount;
@@ -305,6 +309,7 @@ const TOP_PAD = 50;
 
 const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'bytes' }) => {
     const [hoveredNode, setHoveredNode] = React.useState<string | null>(null);
+    const [hoveredEdge, setHoveredEdge] = React.useState<string | null>(null);
     const [selectedNode, setSelectedNode] = React.useState<string | null>(null);
     const [tooltipContent, setTooltipContent] = React.useState('');
     const [tooltipPos, setTooltipPos] = React.useState({ x: 0, y: 0 });
@@ -343,21 +348,40 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
         return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
     };
 
-    // Highlight: when hovering a node, highlight all edges on paths through it
+    // Highlight: when hovering a node or edge, highlight all related paths
     const highlightedEdges = React.useMemo(() => {
-        if (!hoveredNode && !selectedNode) return null;
-        const nodeId = hoveredNode || selectedNode;
-        const node = dag.nodes.find((n) => n.id === nodeId);
-        if (!node) return null;
+        if (!hoveredNode && !selectedNode && !hoveredEdge) return null;
 
         const edgeKeys = new Set<string>();
-        for (const path of node.flowPaths) {
-            for (let i = 0; i < path.stepIds.length - 1; i++) {
-                edgeKeys.add(`${path.stepIds[i]}→${path.stepIds[i + 1]}`);
+
+        if (hoveredEdge) {
+            // Find the edge and highlight all paths through it
+            const edge = dag.edges.find((e) => `${e.fromId}→${e.toId}:${e.action}` === hoveredEdge);
+            if (edge) {
+                // Find paths that go through both fromId and toId in order
+                for (const path of dag.paths) {
+                    const fromIdx = path.stepIds.indexOf(edge.fromId);
+                    const toIdx = path.stepIds.indexOf(edge.toId);
+                    if (fromIdx >= 0 && toIdx >= 0 && toIdx > fromIdx && path.action === edge.action) {
+                        for (let i = 0; i < path.stepIds.length - 1; i++) {
+                            edgeKeys.add(`${path.stepIds[i]}→${path.stepIds[i + 1]}`);
+                        }
+                    }
+                }
+            }
+        } else {
+            const nodeId = hoveredNode || selectedNode;
+            const node = dag.nodes.find((n) => n.id === nodeId);
+            if (!node) return null;
+
+            for (const path of node.flowPaths) {
+                for (let i = 0; i < path.stepIds.length - 1; i++) {
+                    edgeKeys.add(`${path.stepIds[i]}→${path.stepIds[i + 1]}`);
+                }
             }
         }
         return edgeKeys;
-    }, [hoveredNode, selectedNode, dag]);
+    }, [hoveredNode, hoveredEdge, selectedNode, dag]);
 
     // Column headers from tier ordering
     const tierCols = React.useMemo(() => {
@@ -403,19 +427,35 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
                     ))}
 
                     {/* Edges */}
-                    {dag.edges.map((edge) => {
+                    {dag.edges.map((edge, edgeIdx) => {
                         const from = nodePos.get(edge.fromId);
                         const to = nodePos.get(edge.toId);
                         if (!from || !to) return null;
 
                         const w = 2 + (Math.log(edge.volume + 1) / Math.log(maxEdgeVol + 1)) * 10;
-                        const edgeKey = `${edge.fromId}→${edge.toId}`;
-                        const isHighlighted = !highlightedEdges || highlightedEdges.has(edgeKey);
-                        const isDeny = edge.action === 'Deny' || edge.action === 'Default Deny' || edge.action === 'N/A';
+                        const edgeStepKey = `${edge.fromId}→${edge.toId}`;
+                        const edgeFullKey = `${edge.fromId}→${edge.toId}:${edge.action}`;
+                        const isHighlighted = !highlightedEdges || highlightedEdges.has(edgeStepKey);
+                        const isDeny = edge.action === 'Deny' || edge.action === 'Default Deny';
                         const color = ACTION_COLORS[edge.action] || '#4A5568';
 
                         return (
-                            <g key={edgeKey}>
+                            <g key={`edge-${edgeIdx}`}>
+                                {/* Invisible hover area */}
+                                <path
+                                    d={curvedLink(from.x + DOT_R, from.y, to.x - DOT_R, to.y)}
+                                    fill='none'
+                                    stroke='transparent'
+                                    strokeWidth={Math.max(w, 14)}
+                                    style={{ cursor: 'pointer' }}
+                                    onMouseEnter={(e) => {
+                                        setHoveredEdge(edgeFullKey);
+                                        setTooltipContent(`${edge.flowCount} flows · ${formatBytes(edge.volume)}\nAction: ${edge.action}`);
+                                        setTooltipPos({ x: e.clientX, y: e.clientY });
+                                    }}
+                                    onMouseLeave={() => { setHoveredEdge(null); setTooltipContent(''); }}
+                                />
+                                {/* Visible edge */}
                                 <path
                                     d={curvedLink(from.x + DOT_R, from.y, to.x - DOT_R, to.y)}
                                     fill='none'
@@ -423,6 +463,7 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
                                     strokeWidth={w}
                                     strokeOpacity={isHighlighted ? 0.5 : 0.06}
                                     strokeLinecap='round'
+                                    pointerEvents='none'
                                     style={{ transition: 'stroke-opacity 0.15s ease' }}
                                 />
                                 {/* Animated direction on highlighted edges */}
@@ -457,14 +498,18 @@ const PolicyTreeGraph: React.FC<Props> = ({ flows, width, height, metric = 'byte
                                 const node = dag.nodes.find((nn) => nn.id === (hoveredNode || selectedNode));
                                 return node?.flowPaths.includes(p);
                             });
+                        // Color entry line by the most common terminal action of paths entering here
+                        const actions = entryPaths.map((p) => p.action);
+                        const entryAction = actions.includes('Deny') || actions.includes('Default Deny') ? 'Deny' : 'Allow';
+                        const entryColor = ACTION_COLORS[entryAction] || '#4A5568';
                         return (
                             <path
                                 key={`entry-${n.id}`}
-                                d={`M0,${pos.y} C${pos.x * 0.3},${pos.y} ${pos.x * 0.6},${pos.y} ${pos.x - DOT_R},${pos.y}`}
+                                d={`M0,${pos.y} L${pos.x - DOT_R},${pos.y}`}
                                 fill='none'
-                                stroke='#4A5568'
+                                stroke={entryColor}
                                 strokeWidth={w}
-                                strokeOpacity={isHighlighted ? 0.3 : 0.06}
+                                strokeOpacity={isHighlighted ? 0.4 : 0.06}
                                 strokeLinecap='round'
                                 style={{ transition: 'stroke-opacity 0.15s ease' }}
                             />
