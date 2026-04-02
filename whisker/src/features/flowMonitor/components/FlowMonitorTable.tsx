@@ -2,8 +2,12 @@ import React from 'react';
 import {
     Box, Flex, Text, Table, Thead, Tbody, Tr, Th, Td,
 } from '@chakra-ui/react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { FlowLog } from '@/types/render';
 import { Policy } from '@/types/api';
+import FlowTraceViz from './FlowTraceViz';
+
+const MotionBox = motion(Box);
 
 type Props = {
     flows: FlowLog[];
@@ -109,6 +113,7 @@ const REMOVE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
 
 const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
     const [now, setNow] = React.useState(Date.now());
+    const [selectedFlowKey, setSelectedFlowKey] = React.useState<string | null>(null);
     const flowMapRef = React.useRef(new Map<string, MonitoredFlow>());
 
     // Tick every 10s to update staleness
@@ -253,12 +258,16 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                         // Shimmer when data updated in the last 1 second
                         const recentlyUpdated = !isStale && (now - f.updatedAt < 1000);
 
+                        const isSelected = selectedFlowKey === f.key;
+
                         return (
                             <Tr
                                 key={f.key}
-                                bg={rowBg}
+                                bg={isSelected ? 'rgba(255,255,255,0.08)' : rowBg}
                                 _hover={{ bg: isStale ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.05)' }}
                                 transition='background 0.3s ease'
+                                onClick={() => setSelectedFlowKey(isSelected ? null : f.key)}
+                                cursor='pointer'
                                 sx={recentlyUpdated ? {
                                     '& td *': {
                                         animation: 'textShimmer 1.2s ease-out',
@@ -390,6 +399,74 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                     <Text fontFamily='monospace'>Waiting for flow data...</Text>
                 </Flex>
             )}
+
+            {/* Flow trace detail panel */}
+            <AnimatePresence>
+                {selectedFlowKey && (() => {
+                    // Find the matching raw flow(s) for this key
+                    const matchedFlows = flows.filter((f) => flowKey(f) === selectedFlowKey);
+                    const selectedMonitored = flowMapRef.current.get(selectedFlowKey);
+                    if (!matchedFlows.length || !selectedMonitored) return null;
+
+                    // Find Src and Dst reporter flows
+                    const srcFlow = matchedFlows.find((f) => f.reporter === 'Src');
+                    const dstFlow = matchedFlows.find((f) => f.reporter === 'Dst');
+
+                    return (
+                        <MotionBox
+                            position='fixed' bottom={0} left={0} right={0}
+                            bg='gray.800' borderTop='1px solid' borderColor='gray.600'
+                            p={5} maxH='40vh' overflowY='auto'
+                            initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+                            transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+                            boxShadow='0 -8px 30px rgba(0,0,0,0.5)' zIndex={100}
+                        >
+                            <Flex justify='space-between' align='center' mb={3}>
+                                <Box>
+                                    <Text color='white' fontWeight='bold' fontSize='md' fontFamily='monospace'>
+                                        {cleanName(selectedMonitored.sourceName)}
+                                        <Text as='span' color='gray.500' mx={2}>→</Text>
+                                        {cleanName(selectedMonitored.destName)}
+                                    </Text>
+                                    <Flex gap={4} mt={1} fontSize='sm' color='gray.400' fontFamily='monospace'>
+                                        <Text>{selectedMonitored.protocol}:{selectedMonitored.destPort}</Text>
+                                        <Text>{formatBytes(selectedMonitored.bytesIn + selectedMonitored.bytesOut)}</Text>
+                                        <Text
+                                            color={ACTION_COLORS[selectedMonitored.action] || 'gray.400'}
+                                            fontWeight='bold'
+                                        >
+                                            {selectedMonitored.action}
+                                        </Text>
+                                    </Flex>
+                                </Box>
+                                <Text
+                                    color='gray.500' fontSize='sm' cursor='pointer'
+                                    onClick={(e) => { e.stopPropagation(); setSelectedFlowKey(null); }}
+                                    _hover={{ color: 'white' }} px={2}
+                                >
+                                    ✕
+                                </Text>
+                            </Flex>
+
+                            {srcFlow && (
+                                <Box mb={3}>
+                                    <FlowTraceViz flow={srcFlow} width={Math.min(window.innerWidth - 60, 1100)} />
+                                </Box>
+                            )}
+                            {dstFlow && (
+                                <Box>
+                                    <FlowTraceViz flow={dstFlow} width={Math.min(window.innerWidth - 60, 1100)} />
+                                </Box>
+                            )}
+                            {!srcFlow && !dstFlow && (
+                                <Text color='gray.500' fontSize='xs' fontFamily='monospace'>
+                                    No policy trace data available for this flow.
+                                </Text>
+                            )}
+                        </MotionBox>
+                    );
+                })()}
+            </AnimatePresence>
         </Box>
     );
 };
