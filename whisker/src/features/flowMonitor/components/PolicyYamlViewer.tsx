@@ -56,29 +56,37 @@ const PolicyYamlViewer: React.FC<Props> = ({ kind, name, namespace, tier, ruleIn
         if (!yaml || ruleIndex === undefined || ruleIndex < 0) return null;
 
         const lines = yaml.split('\n');
-        let ruleCount = -1;
         let highlightStart = -1;
         let highlightEnd = -1;
+
+        // Find the ingress: or egress: section under spec:.
+        // These are at exactly 2-space indent: "  ingress:" or "  egress:".
+        // Rules within are list items at 2-space indent: "  - action: ..."
         let inRulesSection = false;
+        let rulesSectionIndent = -1;
+        let ruleCount = -1;
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
+            const indent = line.length - line.trimStart().length;
             const trimmed = line.trimStart();
 
-            // Detect ingress: or egress: section
-            if (/^(ingress|egress):/.test(trimmed)) {
+            // Detect "  ingress:" or "  egress:" (spec-level keys)
+            if (/^(ingress|egress):$/.test(trimmed) && indent >= 2) {
                 inRulesSection = true;
+                rulesSectionIndent = indent;
                 ruleCount = -1;
                 continue;
             }
 
-            // Detect end of rules section
-            if (inRulesSection && /^\S/.test(line) && !/^-/.test(trimmed) && !/^\s/.test(line)) {
+            // If we're in a rules section, check if we've left it
+            // (a line at the same or lesser indent that isn't a list item)
+            if (inRulesSection && trimmed.length > 0 && indent <= rulesSectionIndent && !trimmed.startsWith('- ')) {
                 inRulesSection = false;
             }
 
-            // Count rules (lines starting with "- ")
-            if (inRulesSection && /^\s*- /.test(line)) {
+            // Count list items at exactly rulesSectionIndent (the "- action:" lines)
+            if (inRulesSection && trimmed.startsWith('- ') && indent === rulesSectionIndent) {
                 ruleCount++;
                 if (ruleCount === ruleIndex) {
                     highlightStart = i;
@@ -89,7 +97,17 @@ const PolicyYamlViewer: React.FC<Props> = ({ kind, name, namespace, tier, ruleIn
         }
 
         if (highlightStart >= 0 && highlightEnd < 0) {
-            highlightEnd = lines.length;
+            // Find where this rule block ends (next line at same or lesser indent, or EOF)
+            for (let i = highlightStart + 1; i < lines.length; i++) {
+                const line = lines[i];
+                const trimmed = line.trimStart();
+                const indent = line.length - line.trimStart().length;
+                if (trimmed.length > 0 && indent <= rulesSectionIndent) {
+                    highlightEnd = i;
+                    break;
+                }
+            }
+            if (highlightEnd < 0) highlightEnd = lines.length;
         }
 
         return { highlightStart, highlightEnd };
