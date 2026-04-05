@@ -225,14 +225,24 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                     </g>
                 ))}
 
-                {/* Network zone */}
+                {/* Network zone — two vertical borders with a cloud/network icon */}
+                <line x1={centerX - netW / 2} y1={6} x2={centerX - netW / 2} y2={SVG_H - 6}
+                    stroke='#4A5568' strokeWidth={1.5} strokeDasharray='3,3' />
+                <line x1={centerX + netW / 2} y1={6} x2={centerX + netW / 2} y2={SVG_H - 6}
+                    stroke='#4A5568' strokeWidth={1.5} strokeDasharray='3,3' />
+                {/* Simple network icon: two small arrows */}
+                <g opacity={0.5}>
+                    <path d={`M${centerX - 8},${cy - 4} L${centerX + 2},${cy - 4}`} stroke='#718096' strokeWidth={1.5} fill='none' markerEnd='url(#arrowR)' />
+                    <path d={`M${centerX + 8},${cy + 4} L${centerX - 2},${cy + 4}`} stroke='#718096' strokeWidth={1.5} fill='none' markerEnd='url(#arrowL)' />
+                </g>
                 <defs>
-                    <pattern id='ntp' patternUnits='userSpaceOnUse' width='6' height='6'>
-                        <path d='M0,6 L6,0' stroke='#2D3748' strokeWidth={0.5} />
-                    </pattern>
+                    <marker id='arrowR' markerWidth='4' markerHeight='4' refX='3' refY='2' orient='auto'>
+                        <path d='M0,0 L4,2 L0,4' fill='#718096' />
+                    </marker>
+                    <marker id='arrowL' markerWidth='4' markerHeight='4' refX='1' refY='2' orient='auto'>
+                        <path d='M4,0 L0,2 L4,4' fill='#718096' />
+                    </marker>
                 </defs>
-                <rect x={centerX - netW / 2} y={4} width={netW} height={SVG_H - 8}
-                    rx={4} fill='url(#ntp)' opacity={0.5} stroke='#2D3748' strokeWidth={1} />
 
                 {/* Egress segments */}
                 {eSegs.map((s, i) => (
