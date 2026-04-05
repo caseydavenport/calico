@@ -247,10 +247,17 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                     </marker>
                 </defs>
 
-                {/* Egress segments */}
+                {/* Egress segments with flow animation */}
                 {eSegs.map((s, i) => (
-                    <line key={`es-${i}`} x1={s.x1} y1={cy} x2={s.x2} y2={cy}
-                        stroke={s.color} strokeWidth={3} strokeOpacity={0.5} strokeLinecap='round' />
+                    <g key={`es-${i}`}>
+                        <line x1={s.x1} y1={cy} x2={s.x2} y2={cy}
+                            stroke={s.color} strokeWidth={3} strokeOpacity={0.5} strokeLinecap='round' />
+                        <line x1={s.x1} y1={cy} x2={s.x2} y2={cy}
+                            stroke='rgba(255,255,255,0.3)' strokeWidth={1.5}
+                            strokeDasharray='4,12' strokeLinecap='round'>
+                            <animate attributeName='stroke-dashoffset' from='16' to='0' dur='1s' repeatCount='indefinite' />
+                        </line>
+                    </g>
                 ))}
 
                 {/* Network bridge */}
@@ -260,10 +267,17 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                         strokeDasharray='3,3' strokeLinecap='round' />
                 )}
 
-                {/* Ingress segments */}
+                {/* Ingress segments with flow animation */}
                 {iSegs.map((s, i) => (
-                    <line key={`is-${i}`} x1={s.x1} y1={cy} x2={s.x2} y2={cy}
-                        stroke={s.color} strokeWidth={3} strokeOpacity={0.5} strokeLinecap='round' />
+                    <g key={`is-${i}`}>
+                        <line x1={s.x1} y1={cy} x2={s.x2} y2={cy}
+                            stroke={s.color} strokeWidth={3} strokeOpacity={0.5} strokeLinecap='round' />
+                        <line x1={s.x1} y1={cy} x2={s.x2} y2={cy}
+                            stroke='rgba(255,255,255,0.3)' strokeWidth={1.5}
+                            strokeDasharray='4,12' strokeLinecap='round'>
+                            <animate attributeName='stroke-dashoffset' from='16' to='0' dur='1s' repeatCount='indefinite' />
+                        </line>
+                    </g>
                 ))}
 
                 {/* Egress dots — hover for tooltip, click for YAML viewer */}
