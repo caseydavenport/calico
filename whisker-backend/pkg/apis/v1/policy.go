@@ -19,10 +19,10 @@ const (
 )
 
 type GetPolicyParams struct {
-	Kind      string `query:"kind"`
-	Name      string `query:"name"`
-	Namespace string `query:"namespace"`
-	Tier      string `query:"tier"`
+	Kind      string `urlQuery:"kind"`
+	Name      string `urlQuery:"name"`
+	Namespace string `urlQuery:"namespace"`
+	Tier      string `urlQuery:"tier"`
 }
 
 type PolicyResponse struct {
