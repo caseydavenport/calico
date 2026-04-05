@@ -56,6 +56,7 @@ func (h *policyHdlr) Get(ctx apictx.Context, params whiskerv1.GetPolicyParams) a
 
 	if params.Kind == "" || params.Name == "" {
 		return apiutil.NewListResponse[whiskerv1.PolicyResponse]().
+			SetStatus(http.StatusBadRequest).
 			SetError("kind and name are required")
 	}
 
@@ -72,6 +73,7 @@ func (h *policyHdlr) Get(ctx apictx.Context, params whiskerv1.GetPolicyParams) a
 	if err != nil {
 		logger.WithError(err).Warn("Failed to fetch policy.")
 		return apiutil.NewListResponse[whiskerv1.PolicyResponse]().
+			SetStatus(http.StatusNotFound).
 			SetError(fmt.Sprintf("failed to fetch policy: %v", err))
 	}
 
@@ -84,6 +86,7 @@ func (h *policyHdlr) Get(ctx apictx.Context, params whiskerv1.GetPolicyParams) a
 	}
 
 	return apiutil.NewListResponse[whiskerv1.PolicyResponse]().
+		SetStatus(http.StatusOK).
 		SetItems([]whiskerv1.PolicyResponse{resp}).
 		SetMeta(apiutil.ListMeta{TotalPages: 1})
 }
