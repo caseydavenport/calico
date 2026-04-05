@@ -45,7 +45,6 @@ import (
 
 	"github.com/projectcalico/calico/crypto/pkg/tls"
 	"github.com/projectcalico/calico/kube-controllers/pkg/config"
-	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
 	"github.com/projectcalico/calico/kube-controllers/pkg/controllers/controller"
 	"github.com/projectcalico/calico/kube-controllers/pkg/controllers/flannelmigration"
 	"github.com/projectcalico/calico/kube-controllers/pkg/controllers/ippool"
@@ -60,6 +59,7 @@ import (
 	"github.com/projectcalico/calico/kube-controllers/pkg/controllers/utils"
 	"github.com/projectcalico/calico/kube-controllers/pkg/converter"
 	"github.com/projectcalico/calico/kube-controllers/pkg/status"
+	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
 	"github.com/projectcalico/calico/libcalico-go/lib/apiconfig"
 	bapi "github.com/projectcalico/calico/libcalico-go/lib/backend/api"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/k8s"

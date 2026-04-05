@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	log "github.com/sirupsen/logrus"
 
+	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
 	"github.com/projectcalico/calico/libcalico-go/lib/apiconfig"
 	bapi "github.com/projectcalico/calico/libcalico-go/lib/backend/api"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/syncersv1/bgpsyncer"
@@ -40,7 +41,6 @@ import (
 	"github.com/projectcalico/calico/libcalico-go/lib/debugserver"
 	"github.com/projectcalico/calico/libcalico-go/lib/health"
 	"github.com/projectcalico/calico/libcalico-go/lib/metricsserver"
-	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
 	"github.com/projectcalico/calico/pkg/buildinfo"
 	"github.com/projectcalico/calico/typha/pkg/calc"
 	"github.com/projectcalico/calico/typha/pkg/config"
