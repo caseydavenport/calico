@@ -78,3 +78,42 @@ func TestInitBridge_DefaultExportInterval(t *testing.T) {
 	defer cancel()
 	shutdown(ctx)
 }
+
+func TestInitFromEnv_NotSet(t *testing.T) {
+	// No env vars set; OTel should be disabled with no error.
+	shutdown, err := InitFromEnv(context.Background(), "calico-test", "v0.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, shutdown)
+	// Returned shutdown must be a no-op.
+	require.NoError(t, shutdown(context.Background()))
+}
+
+func TestInitFromEnv_WithEndpoint(t *testing.T) {
+	t.Setenv(EnvOTLPEndpoint, "localhost:4317")
+	t.Setenv("NODE_NAME", "test-node")
+	t.Setenv("POD_NAME", "test-pod")
+	t.Setenv("POD_NAMESPACE", "test-ns")
+
+	shutdown, err := InitFromEnv(context.Background(), "calico-test", "v0.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, shutdown)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// Shutdown may return an error because the OTLP endpoint is unreachable during tests.
+	shutdown(ctx)
+}
+
+func TestInitFromEnv_ServiceNameOverride(t *testing.T) {
+	t.Setenv(EnvOTLPEndpoint, "localhost:4317")
+	t.Setenv(EnvOTLPServiceName, "overridden-service")
+
+	shutdown, err := InitFromEnv(context.Background(), "calico-test", "v0.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, shutdown)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// Shutdown may return an error because the OTLP endpoint is unreachable during tests.
+	shutdown(ctx)
+}
