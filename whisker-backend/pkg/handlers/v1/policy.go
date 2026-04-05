@@ -19,6 +19,8 @@ import (
 	"net/http"
 
 	"github.com/sirupsen/logrus"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
@@ -31,10 +33,11 @@ import (
 
 type policyHdlr struct {
 	k8sClient ctrlclient.Reader
+	scheme    *runtime.Scheme
 }
 
-func NewPolicy(k8sClient ctrlclient.Reader) *policyHdlr {
-	return &policyHdlr{k8sClient: k8sClient}
+func NewPolicy(k8sClient ctrlclient.Reader, scheme *runtime.Scheme) *policyHdlr {
+	return &policyHdlr{k8sClient: k8sClient, scheme: scheme}
 }
 
 func (h *policyHdlr) APIs() []apiutil.Endpoint {
@@ -84,46 +87,25 @@ func (h *policyHdlr) Get(ctx apictx.Context, params whiskerv1.GetPolicyParams) a
 }
 
 func (h *policyHdlr) fetchPolicy(ctx apictx.Context, kind, namespace, name string) (string, error) {
+	var obj ctrlclient.Object
+	var key ctrlclient.ObjectKey
+
 	switch kind {
 	case "NetworkPolicy", "CalicoNetworkPolicy":
-		pol := &v3.NetworkPolicy{}
-		if err := h.k8sClient.Get(ctx, ctrlclient.ObjectKey{Namespace: namespace, Name: name}, pol); err != nil {
-			return "", fmt.Errorf("get NetworkPolicy %s/%s: %w", namespace, name, err)
-		}
-		pol.ManagedFields = nil
-		pol.Annotations = filterAnnotations(pol.Annotations)
-		b, err := yaml.Marshal(pol)
-		return string(b), err
+		obj = &v3.NetworkPolicy{}
+		key = ctrlclient.ObjectKey{Namespace: namespace, Name: name}
 
 	case "GlobalNetworkPolicy":
-		pol := &v3.GlobalNetworkPolicy{}
-		if err := h.k8sClient.Get(ctx, ctrlclient.ObjectKey{Name: name}, pol); err != nil {
-			return "", fmt.Errorf("get GlobalNetworkPolicy %s: %w", name, err)
-		}
-		pol.ManagedFields = nil
-		pol.Annotations = filterAnnotations(pol.Annotations)
-		b, err := yaml.Marshal(pol)
-		return string(b), err
+		obj = &v3.GlobalNetworkPolicy{}
+		key = ctrlclient.ObjectKey{Name: name}
 
 	case "StagedNetworkPolicy":
-		pol := &v3.StagedNetworkPolicy{}
-		if err := h.k8sClient.Get(ctx, ctrlclient.ObjectKey{Namespace: namespace, Name: name}, pol); err != nil {
-			return "", fmt.Errorf("get StagedNetworkPolicy %s/%s: %w", namespace, name, err)
-		}
-		pol.ManagedFields = nil
-		pol.Annotations = filterAnnotations(pol.Annotations)
-		b, err := yaml.Marshal(pol)
-		return string(b), err
+		obj = &v3.StagedNetworkPolicy{}
+		key = ctrlclient.ObjectKey{Namespace: namespace, Name: name}
 
 	case "StagedGlobalNetworkPolicy":
-		pol := &v3.StagedGlobalNetworkPolicy{}
-		if err := h.k8sClient.Get(ctx, ctrlclient.ObjectKey{Name: name}, pol); err != nil {
-			return "", fmt.Errorf("get StagedGlobalNetworkPolicy %s: %w", name, err)
-		}
-		pol.ManagedFields = nil
-		pol.Annotations = filterAnnotations(pol.Annotations)
-		b, err := yaml.Marshal(pol)
-		return string(b), err
+		obj = &v3.StagedGlobalNetworkPolicy{}
+		key = ctrlclient.ObjectKey{Name: name}
 
 	case "Profile":
 		return "# Profile: default allow/deny\n# Profiles are system-managed.", nil
@@ -131,6 +113,51 @@ func (h *policyHdlr) fetchPolicy(ctx apictx.Context, kind, namespace, name strin
 	default:
 		return "", fmt.Errorf("unsupported kind: %s", kind)
 	}
+
+	if err := h.k8sClient.Get(ctx, key, obj); err != nil {
+		return "", fmt.Errorf("get %s %s: %w", kind, name, err)
+	}
+
+	return toCleanYAML(obj, h.scheme)
+}
+
+// toCleanYAML converts a runtime.Object to YAML that looks like kubectl output,
+// with proper apiVersion/kind/metadata/spec nesting.
+func toCleanYAML(obj ctrlclient.Object, scheme *runtime.Scheme) (string, error) {
+	// Convert typed object to unstructured to get proper K8s YAML layout
+	u := &unstructured.Unstructured{}
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return "", fmt.Errorf("convert to unstructured: %w", err)
+	}
+	u.Object = data
+
+	// Set GVK from scheme if not already set
+	if u.GetAPIVersion() == "" {
+		gvks, _, _ := scheme.ObjectKinds(obj)
+		if len(gvks) > 0 {
+			u.SetGroupVersionKind(gvks[0])
+		}
+	}
+
+	// Clean up noisy fields
+	delete(u.Object, "status")
+	if meta, ok := u.Object["metadata"].(map[string]interface{}); ok {
+		delete(meta, "managedFields")
+		delete(meta, "creationTimestamp")
+		delete(meta, "resourceVersion")
+		delete(meta, "uid")
+		delete(meta, "generation")
+		if annotations, ok := meta["annotations"].(map[string]interface{}); ok {
+			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+			if len(annotations) == 0 {
+				delete(meta, "annotations")
+			}
+		}
+	}
+
+	b, err := yaml.Marshal(u.Object)
+	return string(b), err
 }
 
 func filterAnnotations(annotations map[string]string) map[string]string {

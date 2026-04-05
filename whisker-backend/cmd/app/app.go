@@ -77,7 +77,7 @@ func Run(ctx context.Context, cfg *config.Config) {
 		if err != nil {
 			logrus.WithError(err).Warn("Failed to create K8s client, policy endpoint will be unavailable.")
 		} else {
-			policyAPI := v1.NewPolicy(k8sClient)
+			policyAPI := v1.NewPolicy(k8sClient, scheme)
 			allAPIs = append(allAPIs, policyAPI.APIs()...)
 			logrus.Info("Policy API endpoint enabled.")
 		}
