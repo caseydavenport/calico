@@ -12,6 +12,7 @@ export default defineConfig({
             '/flows': 'http://localhost:3002',
             '/flows-filter-hints': 'http://localhost:3002',
             '/statistics': 'http://localhost:3002',
+            '/policy': 'http://localhost:3002',
         },
     },
     html: {

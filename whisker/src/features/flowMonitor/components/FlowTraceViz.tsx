@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom';
 import { FlowLog } from '@/types/render';
 import { Policy } from '@/types/api';
 import { Box } from '@chakra-ui/react';
+import PolicyYamlViewer from './PolicyYamlViewer';
 
 type Props = {
     srcFlow?: FlowLog;
@@ -31,6 +32,7 @@ type Step = {
     tier: string;
     kind: string;
     namespace: string;
+    ruleIndex: number;
     isTerminal: boolean;
     isTrigger: boolean;
     isKnsProfile: boolean;
@@ -41,18 +43,18 @@ const normalizeSteps = (policies: Policy[]): Step[] => {
     const steps: Step[] = [];
     for (const p of sorted) {
         if (p.kind === 'Profile' && p.name.startsWith('kns.')) {
-            steps.push({ label: 'Default Allow', fullLabel: 'Default Allow (Profile)', action: 'Allow', tier: '_profile_', kind: 'Profile', namespace: '', isTerminal: true, isTrigger: false, isKnsProfile: true });
+            steps.push({ label: 'Default Allow', fullLabel: 'Default Allow (Profile)', action: 'Allow', tier: '_profile_', kind: 'Profile', namespace: '', ruleIndex: -1, isTerminal: true, isTrigger: false, isKnsProfile: true });
             break;
         }
         if (p.trigger) {
             const t = p.trigger as Policy;
-            steps.push({ label: t.name, fullLabel: `${shortKind(t.kind)}: ${t.namespace ? t.namespace + '/' : ''}${t.name}`, action: 'N/A', tier: t.tier || 'default', kind: t.kind, namespace: t.namespace || '', isTerminal: false, isTrigger: true, isKnsProfile: false });
+            steps.push({ label: t.name, fullLabel: `${shortKind(t.kind)}: ${t.namespace ? t.namespace + '/' : ''}${t.name}`, action: 'N/A', tier: t.tier || 'default', kind: t.kind, namespace: t.namespace || '', ruleIndex: t.rule_index ?? -1, isTerminal: false, isTrigger: true, isKnsProfile: false });
             const act = p.action === 'Deny' ? 'Default Deny' : p.action;
-            steps.push({ label: `End of ${p.tier || 'default'}`, fullLabel: `End of Tier: ${p.tier || 'default'}`, action: act, tier: p.tier || 'default', kind: 'EndOfTier', namespace: '', isTerminal: true, isTrigger: false, isKnsProfile: false });
+            steps.push({ label: `End of ${p.tier || 'default'}`, fullLabel: `End of Tier: ${p.tier || 'default'}`, action: act, tier: p.tier || 'default', kind: 'EndOfTier', namespace: '', ruleIndex: -1, isTerminal: true, isTrigger: false, isKnsProfile: false });
             break;
         }
         const isTerminal = p.action === 'Allow' || p.action === 'Deny';
-        steps.push({ label: p.name, fullLabel: `${shortKind(p.kind)}: ${p.namespace ? p.namespace + '/' : ''}${p.name}`, action: p.action, tier: p.tier || 'default', kind: p.kind, namespace: p.namespace || '', isTerminal, isTrigger: false, isKnsProfile: false });
+        steps.push({ label: p.name, fullLabel: `${shortKind(p.kind)}: ${p.namespace ? p.namespace + '/' : ''}${p.name}`, action: p.action, tier: p.tier || 'default', kind: p.kind, namespace: p.namespace || '', ruleIndex: p.rule_index ?? -1, isTerminal, isTrigger: false, isKnsProfile: false });
         if (p.action === 'Deny') break;
     }
     return steps;
@@ -75,6 +77,7 @@ const SVG_H = 44;
 
 const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
     const [tooltip, setTooltip] = React.useState<{ type: 'step'; step: Step; x: number; y: number } | { type: 'tier'; tier: string; side: string; x: number; y: number } | null>(null);
+    const [selectedPolicy, setSelectedPolicy] = React.useState<Step | null>(null);
 
     const flow = srcFlow || dstFlow;
     if (!flow) return null;
@@ -263,7 +266,7 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                         stroke={s.color} strokeWidth={3} strokeOpacity={0.5} strokeLinecap='round' />
                 ))}
 
-                {/* Egress dots (no labels — hover for details) */}
+                {/* Egress dots — hover for tooltip, click for YAML viewer */}
                 {eDots.map((dot, i) => (
                     <circle key={`ed-${i}`} cx={dot.x} cy={cy} r={dot.r}
                         fill={dot.color}
@@ -272,6 +275,12 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                         style={{ cursor: 'pointer' }}
                         onMouseEnter={(e) => showStepTooltip(dot.step, e)}
                         onMouseLeave={() => setTooltip(null)}
+                        onClick={() => {
+                            if (dot.step.kind !== 'EndOfTier' && dot.step.kind !== 'Profile') {
+                                setSelectedPolicy(dot.step);
+                                setTooltip(null);
+                            }
+                        }}
                     />
                 ))}
 
@@ -284,6 +293,12 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                         style={{ cursor: 'pointer' }}
                         onMouseEnter={(e) => showStepTooltip(dot.step, e)}
                         onMouseLeave={() => setTooltip(null)}
+                        onClick={() => {
+                            if (dot.step.kind !== 'EndOfTier' && dot.step.kind !== 'Profile') {
+                                setSelectedPolicy(dot.step);
+                                setTooltip(null);
+                            }
+                        }}
                     />
                 ))}
 
@@ -357,6 +372,17 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                     )}
                 </Box>,
                 document.body,
+            )}
+            {/* Policy YAML viewer modal */}
+            {selectedPolicy && (
+                <PolicyYamlViewer
+                    kind={selectedPolicy.kind}
+                    name={selectedPolicy.label}
+                    namespace={selectedPolicy.namespace}
+                    tier={selectedPolicy.tier}
+                    ruleIndex={selectedPolicy.ruleIndex >= 0 ? selectedPolicy.ruleIndex : undefined}
+                    onClose={() => setSelectedPolicy(null)}
+                />
             )}
         </Box>
     );

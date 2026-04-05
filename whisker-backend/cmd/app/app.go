@@ -19,8 +19,14 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	v3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 
 	"github.com/projectcalico/calico/goldmane/pkg/client"
+	"github.com/projectcalico/calico/lib/httpmachinery/pkg/apiutil"
 	"github.com/projectcalico/calico/lib/httpmachinery/pkg/server"
 	gorillaadpt "github.com/projectcalico/calico/lib/httpmachinery/pkg/server/adaptors/gorilla"
 	"github.com/projectcalico/calico/whisker-backend/pkg/config"
@@ -50,11 +56,36 @@ func Run(ctx context.Context, cfg *config.Config) {
 		opts = append(opts, server.WithTLSFiles(cfg.TLSCertPath, cfg.TLSKeyPath))
 	}
 
+	// Create a controller-runtime client for fetching policy objects.
+	scheme := runtime.NewScheme()
+	if err := v3.AddToScheme(scheme); err != nil {
+		logrus.WithError(err).Fatal("Failed to add Calico v3 scheme.")
+	}
+
+	k8sCfg, err := ctrl.GetConfig()
+	if err != nil {
+		logrus.WithError(err).Warn("Failed to get in-cluster K8s config, policy endpoint will be unavailable.")
+	}
+
+	var allAPIs []apiutil.Endpoint
+
 	flowsAPI := v1.NewFlows(gmCli)
+	allAPIs = append(allAPIs, flowsAPI.APIs()...)
+
+	if k8sCfg != nil {
+		k8sClient, err := ctrlclient.New(k8sCfg, ctrlclient.Options{Scheme: scheme})
+		if err != nil {
+			logrus.WithError(err).Warn("Failed to create K8s client, policy endpoint will be unavailable.")
+		} else {
+			policyAPI := v1.NewPolicy(k8sClient)
+			allAPIs = append(allAPIs, policyAPI.APIs()...)
+			logrus.Info("Policy API endpoint enabled.")
+		}
+	}
 
 	srv, err := server.NewHTTPServer(
 		gorillaadpt.NewRouter(),
-		flowsAPI.APIs(),
+		allAPIs,
 		opts...,
 	)
 	if err != nil {

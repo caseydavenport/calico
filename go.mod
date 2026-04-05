@@ -121,6 +121,8 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
+require gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
+
 require (
 	al.essio.dev/pkg/shellescape v1.5.1 // indirect
 	cel.dev/expr v0.25.1 // indirect
