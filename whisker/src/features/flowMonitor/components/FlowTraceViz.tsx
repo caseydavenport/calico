@@ -1,4 +1,5 @@
 import React from 'react';
+import ReactDOM from 'react-dom';
 import { FlowLog } from '@/types/render';
 import { Policy } from '@/types/api';
 import { Box } from '@chakra-ui/react';
@@ -73,7 +74,7 @@ const DOT_R = 8;
 const SVG_H = 44;
 
 const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
-    const [tooltip, setTooltip] = React.useState<{ content: string; x: number; y: number } | null>(null);
+    const [tooltip, setTooltip] = React.useState<{ type: 'step'; step: Step; x: number; y: number } | { type: 'tier'; tier: string; side: string; x: number; y: number } | null>(null);
 
     const flow = srcFlow || dstFlow;
     if (!flow) return null;
@@ -182,14 +183,11 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
         }
     }
 
-    const showTooltip = (step: Step, e: React.MouseEvent) => {
-        const lines = [
-            step.fullLabel,
-            step.tier !== '_profile_' ? `Tier: ${step.tier}` : '',
-            step.namespace ? `Namespace: ${step.namespace}` : '',
-            `Action: ${step.action}`,
-        ].filter(Boolean);
-        setTooltip({ content: lines.join('\n'), x: e.clientX, y: e.clientY });
+    const showStepTooltip = (step: Step, e: React.MouseEvent) => {
+        setTooltip({ type: 'step', step, x: e.clientX, y: e.clientY });
+    };
+    const showTierTooltip = (tier: string, side: string, e: React.MouseEvent) => {
+        setTooltip({ type: 'tier', tier, side, x: e.clientX, y: e.clientY });
     };
 
     return (
@@ -197,13 +195,15 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
             <svg width={width} height={SVG_H}>
                 {/* Egress tier bars */}
                 {Array.from(eTierMap.entries()).map(([tier, pos]) => (
-                    <g key={`et-${tier}`}>
+                    <g key={`et-${tier}`} style={{ cursor: 'default' }}
+                        onMouseEnter={(e) => showTierTooltip(tier, 'egress', e)}
+                        onMouseLeave={() => setTooltip(null)}>
                         <rect x={pos.tierX} y={2} width={TIER_W} height={SVG_H - 4} rx={3}
-                            fill='#4A5568' stroke='#718096' strokeWidth={0.5} opacity={0.8} />
+                            fill='#4A5568' stroke='#A0AEC0' strokeWidth={1} opacity={0.9} />
                         <text x={pos.tierX + TIER_W / 2} y={SVG_H / 2}
                             textAnchor='middle' dominantBaseline='central'
                             transform={`rotate(-90, ${pos.tierX + TIER_W / 2}, ${SVG_H / 2})`}
-                            fontSize={7} fontWeight='bold' fill='#CBD5E0' fontFamily='monospace'>
+                            fontSize={7} fontWeight='bold' fill='#E2E8F0' fontFamily='monospace'>
                             {(tier === '_profile_' ? 'PROFILE' : tier).toUpperCase()}
                         </text>
                     </g>
@@ -211,13 +211,15 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
 
                 {/* Ingress tier bars */}
                 {Array.from(iTierMap.entries()).map(([tier, pos]) => (
-                    <g key={`it-${tier}`}>
+                    <g key={`it-${tier}`} style={{ cursor: 'default' }}
+                        onMouseEnter={(e) => showTierTooltip(tier, 'ingress', e)}
+                        onMouseLeave={() => setTooltip(null)}>
                         <rect x={pos.tierX} y={2} width={TIER_W} height={SVG_H - 4} rx={3}
-                            fill='#4A5568' stroke='#718096' strokeWidth={0.5} opacity={0.8} />
+                            fill='#4A5568' stroke='#A0AEC0' strokeWidth={1} opacity={0.9} />
                         <text x={pos.tierX + TIER_W / 2} y={SVG_H / 2}
                             textAnchor='middle' dominantBaseline='central'
                             transform={`rotate(-90, ${pos.tierX + TIER_W / 2}, ${SVG_H / 2})`}
-                            fontSize={7} fontWeight='bold' fill='#CBD5E0' fontFamily='monospace'>
+                            fontSize={7} fontWeight='bold' fill='#E2E8F0' fontFamily='monospace'>
                             {(tier === '_profile_' ? 'PROFILE' : tier).toUpperCase()}
                         </text>
                     </g>
@@ -258,7 +260,7 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                         stroke={dot.step.isTerminal ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)'}
                         strokeWidth={dot.step.isTerminal ? 1.5 : 1}
                         style={{ cursor: 'pointer' }}
-                        onMouseEnter={(e) => showTooltip(dot.step, e)}
+                        onMouseEnter={(e) => showStepTooltip(dot.step, e)}
                         onMouseLeave={() => setTooltip(null)}
                     />
                 ))}
@@ -270,7 +272,7 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                         stroke={dot.step.isTerminal ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)'}
                         strokeWidth={dot.step.isTerminal ? 1.5 : 1}
                         style={{ cursor: 'pointer' }}
-                        onMouseEnter={(e) => showTooltip(dot.step, e)}
+                        onMouseEnter={(e) => showStepTooltip(dot.step, e)}
                         onMouseLeave={() => setTooltip(null)}
                     />
                 ))}
@@ -295,18 +297,56 @@ const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
                 </text>
             </svg>
 
-            {/* Tooltip popover */}
-            {tooltip && (
+            {/* Tooltip — portaled to body to escape overflow clipping */}
+            {tooltip && ReactDOM.createPortal(
                 <Box
-                    position='fixed' left={tooltip.x + 14} top={tooltip.y - 30}
-                    bg='gray.900' color='white' px={3} py={2}
+                    position='fixed' left={tooltip.x + 14} top={tooltip.y - 40}
+                    bg='gray.900' color='white' px={0} py={0}
                     borderRadius='lg' fontSize='xs' fontFamily='monospace'
-                    pointerEvents='none' zIndex={1000} whiteSpace='pre-line'
+                    pointerEvents='none' zIndex={10000}
                     border='1px solid' borderColor='gray.600' boxShadow='lg'
-                    lineHeight='1.6'
+                    overflow='hidden'
                 >
-                    {tooltip.content}
-                </Box>
+                    {tooltip.type === 'step' ? (
+                        <table style={{ borderCollapse: 'collapse' }}>
+                            <tbody>
+                                {[
+                                    ['Kind', tooltip.step.kind === 'EndOfTier' ? 'End of Tier' : shortKind(tooltip.step.kind)],
+                                    ['Namespace', tooltip.step.namespace || '—'],
+                                    ['Name', tooltip.step.label],
+                                    ['Tier', tooltip.step.tier === '_profile_' ? 'profile' : tooltip.step.tier],
+                                    ['Action', tooltip.step.action],
+                                ].map(([label, value]) => (
+                                    <tr key={label}>
+                                        <td style={{ padding: '3px 10px', color: '#718096', whiteSpace: 'nowrap' }}>{label}</td>
+                                        <td style={{
+                                            padding: '3px 10px 3px 4px',
+                                            color: label === 'Action' ? (ACTION_COLORS[value] || '#E2E8F0') : '#E2E8F0',
+                                            fontWeight: label === 'Action' ? 'bold' : 'normal',
+                                            whiteSpace: 'nowrap',
+                                        }}>{value}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    ) : (
+                        <table style={{ borderCollapse: 'collapse' }}>
+                            <tbody>
+                                <tr>
+                                    <td style={{ padding: '3px 10px', color: '#718096' }}>Tier</td>
+                                    <td style={{ padding: '3px 10px 3px 4px', color: '#E2E8F0', fontWeight: 'bold' }}>
+                                        {tooltip.tier === '_profile_' ? 'profile' : tooltip.tier}
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style={{ padding: '3px 10px', color: '#718096' }}>Side</td>
+                                    <td style={{ padding: '3px 10px 3px 4px', color: '#A0AEC0' }}>{tooltip.side}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    )}
+                </Box>,
+                document.body,
             )}
         </Box>
     );

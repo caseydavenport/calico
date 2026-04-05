@@ -80,8 +80,10 @@ const policyChainSegments = (policies: Policy[]): PolicySegment[] => {
     return segments;
 };
 
-const isEgressDenied = (segments: PolicySegment[]): boolean =>
+const isDeniedBySegments = (segments: PolicySegment[]): boolean =>
     segments.length > 0 && segments[segments.length - 1].isDeny;
+
+const isEgressDenied = isDeniedBySegments;
 
 // Unique key for a logical flow (merges Src/Dst reporters)
 const flowKey = (f: FlowLog) =>
@@ -157,7 +159,12 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                 if (changed) {
                     existing.updatedAt = Date.now();
                 }
-                existing.action = f.action;
+                // Action = worst outcome across reporters (Deny overrides Allow)
+                if (f.action === 'Deny') {
+                    existing.action = 'Deny';
+                } else if (existing.action !== 'Deny') {
+                    existing.action = f.action;
+                }
                 existing.bytesIn = Math.max(existing.bytesIn, bytesIn);
                 existing.bytesOut = Math.max(existing.bytesOut, bytesOut);
                 existing.packetsIn = Math.max(existing.packetsIn, packetsIn);
@@ -250,11 +257,14 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                 <Tbody>
                     {sortedFlows.map((f) => {
                         const isStale = now - f.lastSeen > STALE_THRESHOLD_MS;
-                        const actionColor = ACTION_COLORS[f.action] || '#718096';
-                        const rowBg = isStale ? STALE_BG : ACTION_BG[f.action] || 'transparent';
+                        const egressDenied = isEgressDenied(f.egressSegments);
+                        const ingressDenied = isDeniedBySegments(f.ingressSegments);
+                        // Display action = worst outcome across both sides
+                        const displayAction = egressDenied || ingressDenied ? 'Deny' : f.action;
+                        const actionColor = ACTION_COLORS[displayAction] || '#718096';
+                        const rowBg = isStale ? STALE_BG : ACTION_BG[displayAction] || 'transparent';
                         const textColor = isStale ? 'gray.600' : 'gray.300';
                         const nameColor = isStale ? 'gray.600' : 'gray.200';
-                        const egressDenied = isEgressDenied(f.egressSegments);
                         // Shimmer when data updated in the last 1 second
                         const recentlyUpdated = !isStale && (now - f.updatedAt < 1000);
 
@@ -291,7 +301,7 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                             color={isStale ? 'gray.600' : actionColor}
                                             transition='color 0.3s ease'
                                         >
-                                            {f.action}
+                                            {displayAction}
                                         </Text>
                                     </Flex>
                                 </Td>
@@ -416,7 +426,7 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                         <MotionBox
                             position='fixed' bottom={0} left={0} right={0}
                             bg='gray.800' borderTop='1px solid' borderColor='gray.600'
-                            p={5} maxH='40vh' overflowY='auto'
+                            p={5} minH='300px' maxH='70vh' overflowY='auto'
                             initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
                             transition={{ type: 'spring', damping: 28, stiffness: 300 }}
                             boxShadow='0 -8px 30px rgba(0,0,0,0.5)' zIndex={100}
@@ -431,12 +441,14 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                     <Flex gap={4} mt={1} fontSize='sm' color='gray.400' fontFamily='monospace'>
                                         <Text>{selectedMonitored.protocol}:{selectedMonitored.destPort}</Text>
                                         <Text>{formatBytes(selectedMonitored.bytesIn + selectedMonitored.bytesOut)}</Text>
-                                        <Text
-                                            color={ACTION_COLORS[selectedMonitored.action] || 'gray.400'}
-                                            fontWeight='bold'
-                                        >
-                                            {selectedMonitored.action}
-                                        </Text>
+                                        {(() => {
+                                            const selAction = isDeniedBySegments(selectedMonitored.egressSegments) || isDeniedBySegments(selectedMonitored.ingressSegments) ? 'Deny' : selectedMonitored.action;
+                                            return (
+                                                <Text color={ACTION_COLORS[selAction] || 'gray.400'} fontWeight='bold'>
+                                                    {selAction}
+                                                </Text>
+                                            );
+                                        })()}
                                     </Flex>
                                 </Box>
                                 <Text
