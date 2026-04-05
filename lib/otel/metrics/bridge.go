@@ -50,9 +50,6 @@ type Config struct {
 
 	// ResourceAttributes are additional OTel resource attributes to include.
 	ResourceAttributes map[string]string
-
-	// testExporter is for internal testing only. When set, it's used instead of creating an OTLP exporter.
-	testExporter metric.Exporter
 }
 
 // InitBridge creates a Prometheus-to-OTLP metrics bridge. It returns a shutdown
@@ -72,18 +69,12 @@ func InitBridge(ctx context.Context, cfg Config) (func(context.Context) error, e
 		cfg.Gatherer = promclient.DefaultGatherer
 	}
 
-	var exporter metric.Exporter
-	if cfg.testExporter != nil {
-		exporter = cfg.testExporter
-	} else {
-		var err error
-		exporter, err = otlpmetricgrpc.New(ctx,
-			otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
-			otlpmetricgrpc.WithInsecure(),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("creating OTLP metric exporter: %w", err)
-		}
+	exporter, err := otlpmetricgrpc.New(ctx,
+		otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
+		otlpmetricgrpc.WithInsecure(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating OTLP metric exporter: %w", err)
 	}
 
 	res, err := buildResource(cfg)

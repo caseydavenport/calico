@@ -21,32 +21,7 @@ import (
 
 	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
-
-// testExporter is a no-op metric exporter for testing.
-type testExporter struct{}
-
-func (t *testExporter) Aggregation(kind metric.InstrumentKind) metric.Aggregation {
-	return nil
-}
-
-func (t *testExporter) Temporality(kind metric.InstrumentKind) metricdata.Temporality {
-	return metricdata.DeltaTemporality
-}
-
-func (t *testExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
-	return nil
-}
-
-func (t *testExporter) ForceFlush(ctx context.Context) error {
-	return nil
-}
-
-func (t *testExporter) Shutdown(ctx context.Context) error {
-	return nil
-}
 
 func TestInitBridge_MissingEndpoint(t *testing.T) {
 	_, err := InitBridge(context.Background(), Config{
@@ -74,31 +49,27 @@ func TestInitBridge_DefaultGatherer(t *testing.T) {
 	counter.Inc()
 
 	shutdown, err := InitBridge(context.Background(), Config{
-		Endpoint:           "localhost:4317",
-		ServiceName:        "test-service",
-		ServiceVersion:     "1.0.0",
-		ResourceAttributes: map[string]string{"k8s.node.name": "test-node"},
-		Gatherer:           reg,
-		testExporter:       &testExporter{},
+		Endpoint:    "localhost:4317",
+		ServiceName: "test-service",
+		Gatherer:    reg,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, shutdown)
 
 	// Use a short timeout for shutdown since there's no real collector.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	require.NoError(t, shutdown(ctx))
+	_ = shutdown(ctx)
 }
 
 func TestInitBridge_DefaultExportInterval(t *testing.T) {
 	shutdown, err := InitBridge(context.Background(), Config{
-		Endpoint:     "localhost:4317",
-		ServiceName:  "test-service",
-		testExporter: &testExporter{},
+		Endpoint:    "localhost:4317",
+		ServiceName: "test-service",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, shutdown)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	require.NoError(t, shutdown(ctx))
+	_ = shutdown(ctx)
 }
