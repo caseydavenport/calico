@@ -49,17 +49,22 @@ func TestInitBridge_DefaultGatherer(t *testing.T) {
 	counter.Inc()
 
 	shutdown, err := InitBridge(context.Background(), Config{
-		Endpoint:    "localhost:4317",
-		ServiceName: "test-service",
-		Gatherer:    reg,
+		Endpoint:       "localhost:4317",
+		ServiceName:    "test-service",
+		ServiceVersion: "1.0.0",
+		Gatherer:       reg,
+		ResourceAttributes: map[string]string{
+			"k8s.node.name": "test-node",
+		},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, shutdown)
 
-	// Use a short timeout for shutdown since there's no real collector.
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Shutdown may return an error because the OTLP endpoint is unreachable,
+	// but it should complete without hanging.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = shutdown(ctx)
+	shutdown(ctx)
 }
 
 func TestInitBridge_DefaultExportInterval(t *testing.T) {
@@ -69,7 +74,7 @@ func TestInitBridge_DefaultExportInterval(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, shutdown)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = shutdown(ctx)
+	shutdown(ctx)
 }
