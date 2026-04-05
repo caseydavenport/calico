@@ -95,7 +95,8 @@ func NewSink(ctx context.Context, cfg SinkConfig) (*Sink, error) {
 }
 
 // Receive converts each flow in the collection to an OTel LogRecord and emits it.
-// fc.Complete() is called after all flows are emitted to mark the collection as pushed.
+// The caller (bucket_ring.go) is responsible for calling fc.Complete() after all
+// sinks have processed.
 func (s *Sink) Receive(fc *storage.FlowCollection) {
 	for i := range fc.Flows {
 		flow := &fc.Flows[i]
@@ -108,8 +109,6 @@ func (s *Sink) Receive(fc *storage.FlowCollection) {
 
 		s.logger.Emit(context.Background(), record)
 	}
-
-	fc.Complete()
 }
 
 // Shutdown flushes pending log records and releases resources.

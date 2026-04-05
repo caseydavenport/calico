@@ -34,6 +34,7 @@ import (
 	"github.com/projectcalico/calico/goldmane/pkg/emitter"
 	"github.com/projectcalico/calico/goldmane/pkg/goldmane"
 	"github.com/projectcalico/calico/goldmane/pkg/internal/utils"
+	calicoOtel "github.com/projectcalico/calico/goldmane/pkg/otel"
 	"github.com/projectcalico/calico/goldmane/pkg/server"
 	"github.com/projectcalico/calico/goldmane/pkg/storage"
 	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
@@ -95,6 +96,9 @@ type Config struct {
 
 	// PrometheusPort is the port to listen on for serving Prometheus metrics.
 	PrometheusPort int `json:"prometheus_port" envconfig:"PROMETHEUS_PORT" default:"0"`
+
+	// OTLPEndpoint is the OTLP gRPC endpoint to export flow logs to. If empty, OTLP export is disabled.
+	OTLPEndpoint string `json:"otlp_endpoint" envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT" default:""`
 }
 
 func ConfigFromEnv() Config {
@@ -160,9 +164,13 @@ func Run(ctx context.Context, cfg Config) {
 	}
 	gm := goldmane.NewGoldmane(opts...)
 
+	// Build the set of flow log sinks. Each configured sink receives a copy of every
+	// FlowCollection on rollover.
+	var sinks []storage.Sink
+	var logEmitter *emitter.Emitter
+
 	if cfg.PushURL != "" {
-		// Create an emitter, which forwards flows to an upstream HTTP endpoint.
-		logEmitter := emitter.NewEmitter(
+		logEmitter = emitter.NewEmitter(
 			emitter.WithKubeClient(kclient),
 			emitter.WithURL(cfg.PushURL),
 			emitter.WithCACertPath(cfg.CACertPath),
@@ -172,20 +180,44 @@ func Run(ctx context.Context, cfg Config) {
 			emitter.WithHealthAggregator(healthAggregator),
 		)
 		go logEmitter.Run(ctx)
+		sinks = append(sinks, logEmitter)
+	}
 
-		if cfg.FileConfigPath != "" {
-			// Start a goroutine to manage sink enablement. This will monitor a file on disk to determine if
-			// the sink should be enabled or disabled, and update the aggregator configuration accordingly. This
-			// allows the sink to be enabled or disabled without a process restart.
+	if cfg.OTLPEndpoint != "" {
+		otlpSink, err := calicoOtel.NewSink(ctx, calicoOtel.SinkConfig{
+			Endpoint:       cfg.OTLPEndpoint,
+			ServiceVersion: buildinfo.Version,
+		})
+		if err != nil {
+			logrus.WithError(err).Fatal("Failed to create OTel flow log sink")
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := otlpSink.Shutdown(shutdownCtx); err != nil {
+				logrus.WithError(err).Warn("Error shutting down OTel flow log sink")
+			}
+		}()
+		sinks = append(sinks, otlpSink)
+	}
+
+	// Wire the sink(s) into Goldmane.
+	switch len(sinks) {
+	case 0:
+		// No sinks configured.
+	case 1:
+		if logEmitter != nil && cfg.FileConfigPath != "" {
+			// Use the sink manager for dynamic enablement of the HTTP emitter.
 			mgr, err := newSinkManager(gm, logEmitter, cfg.FileConfigPath)
 			if err != nil {
 				logrus.WithError(err).Fatal("Failed to create sink manager")
 			}
 			go mgr.run(ctx)
 		} else {
-			// Just set the sink directly.
-			gm.SetSink(logEmitter)
+			gm.SetSink(sinks[0])
 		}
+	default:
+		gm.SetSink(calicoOtel.NewMultiSink(sinks...))
 	}
 
 	// Create a flow collector to receive flows from clients, connected goldmane.
