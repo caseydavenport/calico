@@ -1,10 +1,11 @@
 import React from 'react';
 import { FlowLog } from '@/types/render';
 import { Policy } from '@/types/api';
-import { Box, Flex, Text } from '@chakra-ui/react';
+// Box, Flex, Text unused — pure SVG component
 
 type Props = {
-    flow: FlowLog;
+    srcFlow?: FlowLog;  // Src-reported (egress trace)
+    dstFlow?: FlowLog;  // Dst-reported (ingress trace)
     width?: number;
 };
 
@@ -14,20 +15,13 @@ const ACTION_COLORS: Record<string, string> = {
     Pass: '#3182CE', 'N/A': '#718096',
 };
 
-const shortKind = (kind: string) => {
-    const map: Record<string, string> = {
-        CalicoNetworkPolicy: 'CNP', GlobalNetworkPolicy: 'GNP',
-        NetworkPolicy: 'KNP', Profile: 'Profile',
-    };
-    return map[kind] || kind;
-};
+// shortKind unused in this component — labels use short names directly
 
 const cleanName = (name: string) =>
     name.replace(/-[a-z0-9]{6,10}-\*$/, '-*');
 
 type Step = {
     label: string;
-    shortLabel: string;
     action: string;
     tier: string;
     isTerminal: boolean;
@@ -38,257 +32,288 @@ type Step = {
 const normalizeSteps = (policies: Policy[]): Step[] => {
     const sorted = [...policies].sort((a, b) => (a.policy_index ?? 0) - (b.policy_index ?? 0));
     const steps: Step[] = [];
-
     for (const p of sorted) {
-        const isKns = p.kind === 'Profile' && p.name.startsWith('kns.');
-        const isTrigger = !!p.trigger;
-
-        if (isTrigger) {
+        if (p.kind === 'Profile' && p.name.startsWith('kns.')) {
+            steps.push({ label: 'Default Allow', action: 'Allow', tier: '_profile_', isTerminal: true, isTrigger: false, isKnsProfile: true });
+            break;
+        }
+        if (p.trigger) {
             const trigger = p.trigger as Policy;
-            steps.push({
-                label: `${shortKind(trigger.kind)}: ${trigger.name}`,
-                shortLabel: trigger.name.replace(/.*\./, ''),
-                action: 'N/A',
-                tier: trigger.tier || 'default',
-                isTerminal: false,
-                isTrigger: true,
-                isKnsProfile: false,
-            });
+            steps.push({ label: trigger.name.replace(/.*\./, ''), action: 'N/A', tier: trigger.tier || 'default', isTerminal: false, isTrigger: true, isKnsProfile: false });
             const act = p.action === 'Deny' ? 'Default Deny' : p.action;
-            steps.push({
-                label: `End of Tier ${p.tier || 'default'}`,
-                shortLabel: `End of ${(p.tier || 'default').replace(/.*\./, '')}`,
-                action: act,
-                tier: p.tier || 'default',
-                isTerminal: true,
-                isTrigger: false,
-                isKnsProfile: false,
-            });
+            steps.push({ label: `End of ${(p.tier || 'default').replace(/.*\./, '')}`, action: act, tier: p.tier || 'default', isTerminal: true, isTrigger: false, isKnsProfile: false });
             break;
         }
-
-        if (isKns) {
-            steps.push({
-                label: 'Default Allow (Profile)',
-                shortLabel: 'Default Allow',
-                action: 'Allow',
-                tier: 'profile',
-                isTerminal: true,
-                isTrigger: false,
-                isKnsProfile: true,
-            });
-            break;
-        }
-
         steps.push({
-            label: `${shortKind(p.kind)}: ${p.name}`,
-            shortLabel: p.name.replace(/.*\./, ''),
+            label: p.name.replace(/.*\./, ''),
             action: p.action,
             tier: p.tier || 'default',
             isTerminal: p.action === 'Allow' || p.action === 'Deny',
             isTrigger: false,
             isKnsProfile: false,
         });
-
         if (p.action === 'Deny') break;
     }
     return steps;
 };
 
-const FlowTraceViz: React.FC<Props> = ({ flow, width = 900 }) => {
-    const egressSteps = normalizeSteps(
-        [...(flow.policies?.['enforced'] || [])].filter(
-            // Src-reported flows show egress; if no reporter field, show all
-            () => true,
-        ),
-    );
+// Collect unique tiers in order, putting _profile_ last
+const getOrderedTiers = (steps: Step[]): string[] => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const s of steps) {
+        if (s.tier === '_profile_') continue;
+        if (!seen.has(s.tier)) { seen.add(s.tier); result.push(s.tier); }
+    }
+    if (steps.some((s) => s.tier === '_profile_')) result.push('_profile_');
+    return result;
+};
 
-    // Determine egress vs ingress
-    const isEgress = flow.reporter === 'Src';
-    const sideLabel = isEgress ? 'EGRESS' : 'INGRESS';
+const TIER_W = 22;
+const DOT_R = 7;
+const SVG_H = 48;
+const TIER_GAP = 8;
 
-    const steps = egressSteps;
-    const outcome = steps.length > 0 ? steps[steps.length - 1].action : flow.action;
-    const isDenied = outcome === 'Deny' || outcome === 'Default Deny';
+const FlowTraceViz: React.FC<Props> = ({ srcFlow, dstFlow, width = 900 }) => {
+    const flow = srcFlow || dstFlow;
+    if (!flow) return null;
 
-    // Layout constants
-    const srcX = 10;
-    const stepsStart = 150;
-    const stepsEnd = width - 150;
-    const dstX = width - 10;
-    const cy = 30;
-    const dotR = 8;
-    const stepSpacing = steps.length > 0 ? (stepsEnd - stepsStart) / (steps.length) : 0;
+    const egressSteps = srcFlow ? normalizeSteps(srcFlow.policies?.['enforced'] || []) : [];
+    const ingressSteps = dstFlow ? normalizeSteps(dstFlow.policies?.['enforced'] || []) : [];
 
-    // Group steps by tier for background bars
-    const tierRanges: { tier: string; startIdx: number; endIdx: number }[] = [];
-    let currentTier = '';
-    steps.forEach((s, i) => {
-        if (s.tier !== currentTier) {
-            if (currentTier) {
-                tierRanges[tierRanges.length - 1].endIdx = i - 1;
-            }
-            tierRanges.push({ tier: s.tier, startIdx: i, endIdx: i });
-            currentTier = s.tier;
-        } else {
-            tierRanges[tierRanges.length - 1].endIdx = i;
+    // Determine if egress denied (ingress won't be reached)
+    const egressDenied = egressSteps.length > 0 &&
+        (egressSteps[egressSteps.length - 1].action === 'Deny' ||
+         egressSteps[egressSteps.length - 1].action === 'Default Deny');
+
+    const egressTiers = getOrderedTiers(egressSteps);
+    const ingressTiers = egressDenied ? [] : getOrderedTiers(ingressSteps);
+
+    // Layout regions
+    const srcLabelW = 120;
+    const dstLabelW = 120;
+    const networkW = 40;
+    const centerX = width / 2;
+    const egressRegionLeft = srcLabelW + 10;
+    const egressRegionRight = centerX - networkW / 2 - 5;
+    const ingressRegionLeft = centerX + networkW / 2 + 5;
+    const ingressRegionRight = width - dstLabelW - 10;
+
+    // Place tiers as columns within each region
+    const placeTiers = (tiers: string[], left: number, right: number) => {
+        const totalW = right - left;
+        const slotW = tiers.length > 0 ? totalW / tiers.length : totalW;
+        return new Map(tiers.map((t, i) => [t, {
+            tierX: left + i * slotW,
+            polX: left + i * slotW + TIER_W + TIER_GAP,
+            slotRight: left + (i + 1) * slotW,
+        }]));
+    };
+
+    const eTierMap = placeTiers(egressTiers, egressRegionLeft, egressRegionRight);
+    const iTierMap = placeTiers(ingressTiers, ingressRegionLeft, ingressRegionRight);
+
+    const cy = SVG_H / 2;
+
+    // Build egress dots and segments
+    type Dot = { x: number; color: string; label: string; isTerminal: boolean; r: number };
+    type Seg = { x1: number; x2: number; color: string; dashed?: boolean };
+
+    const egressDots: Dot[] = [];
+    const egressSegs: Seg[] = [];
+    let ex = egressRegionLeft;
+    const egressColor = egressDenied ? ACTION_COLORS.Deny : ACTION_COLORS.Allow;
+
+    // Entry line from source
+    egressSegs.push({ x1: srcLabelW, x2: egressRegionLeft, color: egressColor });
+
+    for (const step of egressSteps) {
+        if (step.tier === '_profile_' || step.isKnsProfile) {
+            // Default Allow goes at the end
+            const dx = egressRegionRight - 10;
+            egressSegs.push({ x1: ex, x2: dx - DOT_R, color: ACTION_COLORS.Allow });
+            egressDots.push({ x: dx, color: ACTION_COLORS['Default Allow'], label: 'Default Allow', isTerminal: true, r: DOT_R + 2 });
+            ex = dx + DOT_R + 4;
+            break;
         }
-    });
+        const tierPos = eTierMap.get(step.tier);
+        if (!tierPos) continue;
+        const dx = tierPos.polX + DOT_R;
+        egressSegs.push({ x1: ex, x2: dx - DOT_R - 2, color: egressColor });
+        const dotColor = step.isTrigger ? '#718096' : (ACTION_COLORS[step.action] || '#3182CE');
+        egressDots.push({ x: dx, color: dotColor, label: step.label, isTerminal: step.isTerminal, r: step.isTerminal ? DOT_R + 2 : DOT_R });
+        ex = dx + DOT_R + 4;
+        if (step.isTerminal) break;
+    }
 
-    const svgH = 70;
+    // If not denied, draw line to network zone
+    if (!egressDenied && egressSteps.length > 0) {
+        egressSegs.push({ x1: ex, x2: centerX - networkW / 2, color: egressColor });
+    }
+
+    // Ingress dots and segments
+    const ingressDots: Dot[] = [];
+    const ingressSegs: Seg[] = [];
+
+    if (!egressDenied && ingressSteps.length > 0) {
+        let ix = ingressRegionLeft;
+        const ingressLastStep = ingressSteps[ingressSteps.length - 1];
+        const ingressDeniedLocal = ingressLastStep &&
+            (ingressLastStep.action === 'Deny' || ingressLastStep.action === 'Default Deny');
+        const ingressColor = ingressDeniedLocal ? ACTION_COLORS.Deny : ACTION_COLORS.Allow;
+
+        // Line from network zone
+        ingressSegs.push({ x1: centerX + networkW / 2, x2: ingressRegionLeft, color: ingressColor });
+
+        for (const step of ingressSteps) {
+            if (step.tier === '_profile_' || step.isKnsProfile) {
+                const dx = ingressRegionRight - 10;
+                ingressSegs.push({ x1: ix, x2: dx - DOT_R, color: ACTION_COLORS.Allow });
+                ingressDots.push({ x: dx, color: ACTION_COLORS['Default Allow'], label: 'Default Allow', isTerminal: true, r: DOT_R + 2 });
+                ix = dx + DOT_R + 4;
+                break;
+            }
+            const tierPos = iTierMap.get(step.tier);
+            if (!tierPos) continue;
+            const dx = tierPos.polX + DOT_R;
+            ingressSegs.push({ x1: ix, x2: dx - DOT_R - 2, color: ingressColor });
+            const dotColor = step.isTrigger ? '#718096' : (ACTION_COLORS[step.action] || '#3182CE');
+            ingressDots.push({ x: dx, color: dotColor, label: step.label, isTerminal: step.isTerminal, r: step.isTerminal ? DOT_R + 2 : DOT_R });
+            ix = dx + DOT_R + 4;
+            if (step.isTerminal) break;
+        }
+
+        // Line to destination
+        if (!ingressDeniedLocal) {
+            ingressSegs.push({ x1: ix, x2: ingressRegionRight, color: ingressColor });
+        }
+    }
+
+
 
     return (
-        <Box>
-            <Flex gap={6} mb={2} align='center'>
-                <Text fontSize='10px' color='gray.500' fontFamily='monospace' fontWeight='bold'>
-                    {sideLabel} POLICY TRACE
-                </Text>
-                <Flex gap={3} fontSize='10px' fontFamily='monospace' color='gray.600'>
-                    <Flex align='center' gap={1}>
-                        <Box w='8px' h='8px' borderRadius='full' bg='#3182CE' /> Pass
-                    </Flex>
-                    <Flex align='center' gap={1}>
-                        <Box w='8px' h='8px' borderRadius='full' bg='#38A169' /> Allow
-                    </Flex>
-                    <Flex align='center' gap={1}>
-                        <Box w='8px' h='8px' borderRadius='full' bg='#E53E3E' /> Deny
-                    </Flex>
-                    <Flex align='center' gap={1}>
-                        <Box w='8px' h='8px' borderRadius='full' bg='#718096' /> N/A
-                    </Flex>
-                </Flex>
-            </Flex>
+        <svg width={width} height={SVG_H}>
+            {/* Egress tier bars */}
+            {Array.from(eTierMap.entries()).map(([tier, pos]) => (
+                <g key={`et-${tier}`}>
+                    <rect x={pos.tierX} y={2} width={TIER_W} height={SVG_H - 4} rx={3}
+                        fill='#4A5568' stroke='#718096' strokeWidth={0.5} opacity={0.7} />
+                    <text x={pos.tierX + TIER_W / 2} y={SVG_H / 2}
+                        textAnchor='middle' dominantBaseline='central'
+                        transform={`rotate(-90, ${pos.tierX + TIER_W / 2}, ${SVG_H / 2})`}
+                        fontSize={8} fontWeight='bold' fill='#CBD5E0' fontFamily='monospace'>
+                        {tier.toUpperCase()}
+                    </text>
+                </g>
+            ))}
 
-            <svg width={width} height={svgH}>
-                {/* Tier background bars */}
-                {tierRanges.map((tr, i) => {
-                    const x1 = stepsStart + tr.startIdx * stepSpacing - 10;
-                    const x2 = stepsStart + (tr.endIdx + 1) * stepSpacing + 10;
-                    return (
-                        <g key={`tier-${i}`}>
-                            <rect
-                                x={x1} y={4} width={x2 - x1} height={svgH - 8}
-                                rx={6} fill='rgba(255,255,255,0.03)'
-                                stroke='rgba(255,255,255,0.06)' strokeWidth={1}
-                            />
-                            <text x={x1 + 6} y={16} fontSize={9} fill='#4A5568' fontFamily='monospace' fontWeight='bold'>
-                                {tr.tier}
-                            </text>
-                        </g>
-                    );
-                })}
+            {/* Ingress tier bars */}
+            {Array.from(iTierMap.entries()).map(([tier, pos]) => (
+                <g key={`it-${tier}`}>
+                    <rect x={pos.tierX} y={2} width={TIER_W} height={SVG_H - 4} rx={3}
+                        fill='#4A5568' stroke='#718096' strokeWidth={0.5} opacity={0.7} />
+                    <text x={pos.tierX + TIER_W / 2} y={SVG_H / 2}
+                        textAnchor='middle' dominantBaseline='central'
+                        transform={`rotate(-90, ${pos.tierX + TIER_W / 2}, ${SVG_H / 2})`}
+                        fontSize={8} fontWeight='bold' fill='#CBD5E0' fontFamily='monospace'>
+                        {tier.toUpperCase()}
+                    </text>
+                </g>
+            ))}
 
-                {/* Source label and entry line */}
-                <text x={srcX} y={cy} dy='0.35em' fontSize={11} fill='#E2E8F0' fontFamily='monospace' fontWeight='bold'>
-                    {cleanName(flow.source_name)}
-                </text>
-                <text x={srcX} y={cy + 14} fontSize={9} fill='#4A5568' fontFamily='monospace'>
-                    {flow.source_namespace}
-                </text>
-                <line
-                    x1={stepsStart - 20} y1={cy} x2={stepsStart + (steps.length > 0 ? 0 : stepSpacing) - dotR} y2={cy}
-                    stroke={isDenied ? ACTION_COLORS.Deny : ACTION_COLORS.Allow}
-                    strokeWidth={3} strokeLinecap='round' strokeOpacity={0.5}
-                />
+            {/* Network zone */}
+            <defs>
+                <pattern id='net-trace' patternUnits='userSpaceOnUse' width='6' height='6'>
+                    <path d='M0,6 L6,0' stroke='#2D3748' strokeWidth={0.5} />
+                </pattern>
+            </defs>
+            <rect x={centerX - networkW / 2} y={2} width={networkW} height={SVG_H - 4}
+                rx={4} fill='url(#net-trace)' opacity={0.5}
+                stroke='#2D3748' strokeWidth={1} />
 
-                {/* Policy dots and connecting lines */}
-                {steps.map((step, i) => {
-                    const x = stepsStart + (i + 0.5) * stepSpacing;
-                    const color = step.isTrigger
-                        ? '#718096'
-                        : step.isKnsProfile
-                          ? ACTION_COLORS['Default Allow']
-                          : ACTION_COLORS[step.action] || '#3182CE';
+            {/* Egress flow segments */}
+            {egressSegs.map((seg, i) => (
+                <line key={`es-${i}`} x1={seg.x1} y1={cy} x2={seg.x2} y2={cy}
+                    stroke={seg.color} strokeWidth={3} strokeOpacity={0.5}
+                    strokeLinecap='round' strokeDasharray={seg.dashed ? '4,3' : undefined} />
+            ))}
 
-                    // Line to next step or to dest
-                    const nextX = i < steps.length - 1
-                        ? stepsStart + (i + 1.5) * stepSpacing
-                        : isDenied ? x + dotR + 20 : dstX - 60;
-                    const lineColor = step.isTerminal
-                        ? color
-                        : isDenied ? ACTION_COLORS.Deny : ACTION_COLORS.Allow;
+            {/* Network bridge (gray dashed) */}
+            {!egressDenied && (
+                <line x1={centerX - networkW / 2 + 2} y1={cy} x2={centerX + networkW / 2 - 2} y2={cy}
+                    stroke='#4A5568' strokeWidth={2} strokeOpacity={0.4}
+                    strokeDasharray='3,3' strokeLinecap='round' />
+            )}
 
-                    return (
-                        <g key={i}>
-                            {/* Connecting line */}
-                            {(i < steps.length - 1 || !isDenied) && (
-                                <line
-                                    x1={x + dotR + 2} y1={cy}
-                                    x2={Math.min(nextX - dotR - 2, nextX)} y2={cy}
-                                    stroke={lineColor}
-                                    strokeWidth={3} strokeLinecap='round'
-                                    strokeOpacity={step.isTerminal && isDenied ? 0 : 0.4}
-                                    strokeDasharray={step.isTerminal && !isDenied ? undefined : undefined}
-                                />
-                            )}
+            {/* Ingress flow segments */}
+            {ingressSegs.map((seg, i) => (
+                <line key={`is-${i}`} x1={seg.x1} y1={cy} x2={seg.x2} y2={cy}
+                    stroke={seg.color} strokeWidth={3} strokeOpacity={0.5}
+                    strokeLinecap='round' />
+            ))}
 
-                            {/* Dot */}
-                            <circle
-                                cx={x} cy={cy} r={step.isTerminal ? dotR + 2 : dotR}
-                                fill={color}
-                                stroke={step.isTerminal ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)'}
-                                strokeWidth={step.isTerminal ? 2 : 1}
-                            />
+            {/* Egress dots */}
+            {egressDots.map((dot, i) => (
+                <g key={`ed-${i}`}>
+                    <circle cx={dot.x} cy={cy} r={dot.r} fill={dot.color}
+                        stroke={dot.isTerminal ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)'}
+                        strokeWidth={dot.isTerminal ? 1.5 : 1} />
+                    <text x={dot.x} y={cy + dot.r + 11} textAnchor='middle'
+                        fontSize={8} fontFamily='monospace'
+                        fill={dot.isTerminal ? dot.color : '#A0AEC0'}
+                        fontWeight={dot.isTerminal ? 'bold' : 'normal'}>
+                        {dot.label}
+                    </text>
+                    {dot.isTerminal && (
+                        <text x={dot.x} y={cy - dot.r - 4} textAnchor='middle'
+                            fontSize={8} fontFamily='monospace' fontWeight='bold' fill={dot.color}>
+                            {i === egressDots.length - 1 ? (egressDenied ? 'Deny' : 'Allow') : ''}
+                        </text>
+                    )}
+                </g>
+            ))}
 
-                            {/* Label below */}
-                            <text
-                                x={x} y={cy + dotR + 14}
-                                textAnchor='middle' fontSize={9}
-                                fontFamily='monospace'
-                                fill={step.isTerminal ? color : '#A0AEC0'}
-                                fontWeight={step.isTerminal ? 'bold' : 'normal'}
-                            >
-                                {step.shortLabel}
-                            </text>
+            {/* Ingress dots */}
+            {ingressDots.map((dot, i) => (
+                <g key={`id-${i}`}>
+                    <circle cx={dot.x} cy={cy} r={dot.r} fill={dot.color}
+                        stroke={dot.isTerminal ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)'}
+                        strokeWidth={dot.isTerminal ? 1.5 : 1} />
+                    <text x={dot.x} y={cy + dot.r + 11} textAnchor='middle'
+                        fontSize={8} fontFamily='monospace'
+                        fill={dot.isTerminal ? dot.color : '#A0AEC0'}
+                        fontWeight={dot.isTerminal ? 'bold' : 'normal'}>
+                        {dot.label}
+                    </text>
+                </g>
+            ))}
 
-                            {/* Action above terminal dots */}
-                            {step.isTerminal && (
-                                <text
-                                    x={x} y={cy - dotR - 6}
-                                    textAnchor='middle' fontSize={9}
-                                    fontFamily='monospace' fontWeight='bold'
-                                    fill={color}
-                                >
-                                    {step.action}
-                                </text>
-                            )}
-                        </g>
-                    );
-                })}
+            {/* Source label */}
+            <text x={8} y={cy - 6} fontSize={11} fill='#E2E8F0' fontFamily='monospace' fontWeight='bold'>
+                {cleanName(flow.source_name)}
+            </text>
+            <text x={8} y={cy + 10} fontSize={8} fill='#4A5568' fontFamily='monospace'>
+                {flow.source_namespace}
+            </text>
 
-                {/* Network zone (if not denied) */}
-                {!isDenied && steps.length > 0 && (
-                    <g>
-                        <rect
-                            x={stepsEnd + 15} y={cy - 10}
-                            width={30} height={20}
-                            rx={4}
-                            fill='url(#net-pattern-trace)' opacity={0.4}
-                            stroke='#2D3748' strokeWidth={1}
-                        />
-                        <defs>
-                            <pattern id='net-pattern-trace' patternUnits='userSpaceOnUse' width='6' height='6'>
-                                <path d='M0,6 L6,0' stroke='#2D3748' strokeWidth={0.5} />
-                            </pattern>
-                        </defs>
-                    </g>
-                )}
+            {/* Destination label */}
+            <text x={width - 8} y={cy - 6} textAnchor='end'
+                fontSize={11} fontFamily='monospace' fontWeight='bold'
+                fill={egressDenied ? '#4A5568' : '#E2E8F0'}
+                fontStyle={egressDenied ? 'italic' : undefined}>
+                {egressDenied ? '✕ ' : ''}{cleanName(flow.dest_name)}
+            </text>
+            <text x={width - 8} y={cy + 10} textAnchor='end'
+                fontSize={8} fill='#4A5568' fontFamily='monospace'>
+                {flow.dest_namespace}
+            </text>
 
-                {/* Destination label */}
-                <text
-                    x={dstX} y={cy} dy='0.35em'
-                    textAnchor='end' fontSize={11}
-                    fill={isDenied ? '#4A5568' : '#E2E8F0'}
-                    fontFamily='monospace' fontWeight='bold'
-                    fontStyle={isDenied ? 'italic' : undefined}
-                >
-                    {isDenied ? '✕ ' : ''}{cleanName(flow.dest_name)}
-                </text>
-                <text x={dstX} y={cy + 14} textAnchor='end' fontSize={9} fill='#4A5568' fontFamily='monospace'>
-                    {flow.dest_namespace}
-                </text>
-            </svg>
-        </Box>
+            {/* Column labels */}
+            <text x={srcLabelW + 5} y={8} fontSize={8} fill='#4A5568' fontFamily='monospace'>EGRESS</text>
+            {!egressDenied && (
+                <text x={ingressRegionLeft} y={8} fontSize={8} fill='#4A5568' fontFamily='monospace'>INGRESS</text>
+            )}
+        </svg>
     );
 };
 

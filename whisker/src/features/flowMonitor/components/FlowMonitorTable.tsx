@@ -448,16 +448,11 @@ const FlowMonitorTable: React.FC<Props> = ({ flows }) => {
                                 </Text>
                             </Flex>
 
-                            {srcFlow && (
-                                <Box mb={3}>
-                                    <FlowTraceViz flow={srcFlow} width={Math.min(window.innerWidth - 60, 1100)} />
-                                </Box>
-                            )}
-                            {dstFlow && (
-                                <Box>
-                                    <FlowTraceViz flow={dstFlow} width={Math.min(window.innerWidth - 60, 1100)} />
-                                </Box>
-                            )}
+                            <FlowTraceViz
+                                srcFlow={srcFlow}
+                                dstFlow={dstFlow}
+                                width={Math.min(window.innerWidth - 60, 1200)}
+                            />
                             {!srcFlow && !dstFlow && (
                                 <Text color='gray.500' fontSize='xs' fontFamily='monospace'>
                                     No policy trace data available for this flow.
