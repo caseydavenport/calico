@@ -60,6 +60,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/projectcalico/api v0.0.0-20220722155641-439a754a988b
 	github.com/projectcalico/calico/lib/httpmachinery v0.0.0-00010101000000-000000000000
+	github.com/projectcalico/calico/lib/otel v0.0.0-00010101000000-000000000000
 	github.com/projectcalico/calico/lib/std v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
@@ -119,6 +120,11 @@ require (
 	sigs.k8s.io/knftables v0.0.21
 	sigs.k8s.io/network-policy-api v0.1.8-0.20260217173220-6bb86defe1a7
 	sigs.k8s.io/yaml v1.6.0
+)
+
+require (
+	go.opentelemetry.io/contrib/bridges/prometheus v0.67.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0 // indirect
 )
 
 require (

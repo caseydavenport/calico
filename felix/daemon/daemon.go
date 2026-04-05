@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2025 Tigera, Inc. All rights reserved.
+// Copyright (c) 2020-2026 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ import (
 	"github.com/projectcalico/calico/felix/proto"
 	"github.com/projectcalico/calico/felix/statusrep"
 	"github.com/projectcalico/calico/felix/usagerep"
+	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
 	"github.com/projectcalico/calico/libcalico-go/lib/apiconfig"
 	"github.com/projectcalico/calico/libcalico-go/lib/apis/internalapi"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend"
@@ -711,6 +712,18 @@ configRetry:
 		gaugeHost.Set(1)
 		prometheus.MustRegister(gaugeHost)
 		dp.ConfigurePrometheusMetrics(configParams)
+		otelShutdown, otelErr := otelmetrics.InitFromEnv(context.Background(), "calico-felix", buildinfo.Version)
+		if otelErr != nil {
+			log.WithError(otelErr).Error("Failed to initialize OTel metrics bridge, continuing without it")
+		} else {
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := otelShutdown(ctx); err != nil {
+					log.WithError(err).Warn("Error shutting down OTel metrics bridge")
+				}
+			}()
+		}
 		if configParams.PrometheusMetricsKeyFile != "" || configParams.PrometheusMetricsCertFile != "" {
 			log.Info("Trying to start metrics https server.")
 			go func() {
