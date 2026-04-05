@@ -60,19 +60,8 @@ func (h *policyHdlr) Get(ctx apictx.Context, params whiskerv1.GetPolicyParams) a
 			SetError("kind and name are required")
 	}
 
-	// For tiered namespaced policies, the K8s name is "tier.name".
-	// Global policies don't use the tier prefix in their K8s name.
-	qualifiedName := params.Name
-	isNamespaced := params.Kind == "NetworkPolicy" || params.Kind == "CalicoNetworkPolicy" ||
-		params.Kind == "StagedNetworkPolicy"
-	if isNamespaced && params.Tier != "" && params.Tier != "default" {
-		prefix := params.Tier + "."
-		if len(params.Name) <= len(prefix) || params.Name[:len(prefix)] != prefix {
-			qualifiedName = prefix + params.Name
-		}
-	}
-
-	yamlStr, err := h.fetchPolicy(ctx, params.Kind, params.Namespace, qualifiedName)
+	// Use the name as-is from the flow log — it's already the K8s object name.
+	yamlStr, err := h.fetchPolicy(ctx, params.Kind, params.Namespace, params.Name)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to fetch policy.")
 		return apiutil.NewListResponse[whiskerv1.PolicyResponse]().
