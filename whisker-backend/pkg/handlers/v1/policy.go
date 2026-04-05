@@ -60,9 +60,12 @@ func (h *policyHdlr) Get(ctx apictx.Context, params whiskerv1.GetPolicyParams) a
 			SetError("kind and name are required")
 	}
 
-	// For tiered policies, the K8s name is "tier.name".
+	// For tiered namespaced policies, the K8s name is "tier.name".
+	// Global policies don't use the tier prefix in their K8s name.
 	qualifiedName := params.Name
-	if params.Tier != "" && params.Tier != "default" {
+	isNamespaced := params.Kind == "NetworkPolicy" || params.Kind == "CalicoNetworkPolicy" ||
+		params.Kind == "StagedNetworkPolicy"
+	if isNamespaced && params.Tier != "" && params.Tier != "default" {
 		prefix := params.Tier + "."
 		if len(params.Name) <= len(prefix) || params.Name[:len(prefix)] != prefix {
 			qualifiedName = prefix + params.Name
