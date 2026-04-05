@@ -22,7 +22,103 @@ type PolicyApiResponse = {
     }>;
 };
 
-const ACTION_KEYWORDS = ['Allow', 'Deny', 'Pass', 'Log'];
+const ACTION_KEYWORD_COLORS: Record<string, string> = {
+    Allow: '#38A169',
+    Deny: '#E53E3E',
+    Pass: '#3182CE',
+    Log: '#D69E2E',
+};
+
+const YAML_COLORS = {
+    key: '#63B3ED',        // blue - YAML keys
+    string: '#68D391',     // green - string values
+    number: '#F6AD55',     // orange - numbers
+    boolean: '#D69E2E',    // yellow - true/false
+    null: '#718096',       // gray - null/empty
+    comment: '#4A5568',    // dark gray - comments
+    dash: '#A0AEC0',       // light gray - list dashes
+    default: '#CBD5E0',    // off-white - everything else
+};
+
+// Tokenize a YAML line into colored spans
+const colorizeYaml = (line: string): React.ReactNode[] => {
+    const spans: React.ReactNode[] = [];
+    let remaining = line;
+    let idx = 0;
+
+    // Leading whitespace
+    const leadingMatch = remaining.match(/^(\s+)/);
+    if (leadingMatch) {
+        spans.push(<span key={idx++} style={{ color: YAML_COLORS.default }}>{leadingMatch[1]}</span>);
+        remaining = remaining.slice(leadingMatch[1].length);
+    }
+
+    // Comment line
+    if (remaining.startsWith('#')) {
+        spans.push(<span key={idx++} style={{ color: YAML_COLORS.comment }}>{remaining}</span>);
+        return spans;
+    }
+
+    // List dash prefix
+    if (remaining.startsWith('- ')) {
+        spans.push(<span key={idx++} style={{ color: YAML_COLORS.dash }}>- </span>);
+        remaining = remaining.slice(2);
+    }
+
+    // Key: value pattern
+    const kvMatch = remaining.match(/^([a-zA-Z0-9_./-]+):(.*)/);
+    if (kvMatch) {
+        const [, key, rest] = kvMatch;
+        spans.push(<span key={idx++} style={{ color: YAML_COLORS.key }}>{key}</span>);
+        spans.push(<span key={idx++} style={{ color: YAML_COLORS.dash }}>:</span>);
+
+        const value = rest.trim();
+        if (value) {
+            spans.push(<span key={idx++} style={{ color: YAML_COLORS.default }}>{rest.slice(0, rest.length - value.length)}</span>);
+
+            // Check for action keywords
+            if (ACTION_KEYWORD_COLORS[value]) {
+                spans.push(<span key={idx++} style={{ color: ACTION_KEYWORD_COLORS[value], fontWeight: 'bold' }}>{value}</span>);
+            }
+            // Quoted string
+            else if (/^["'].*["']$/.test(value)) {
+                spans.push(<span key={idx++} style={{ color: YAML_COLORS.string }}>{value}</span>);
+            }
+            // Number
+            else if (/^\d+$/.test(value)) {
+                spans.push(<span key={idx++} style={{ color: YAML_COLORS.number }}>{value}</span>);
+            }
+            // Boolean
+            else if (/^(true|false)$/i.test(value)) {
+                spans.push(<span key={idx++} style={{ color: YAML_COLORS.boolean }}>{value}</span>);
+            }
+            // Null
+            else if (/^(null|~)$/i.test(value)) {
+                spans.push(<span key={idx++} style={{ color: YAML_COLORS.null }}>{value}</span>);
+            }
+            // Selector expressions (contain ==, in, all(), etc)
+            else if (/[=!<>]|all\(|in \{/.test(value)) {
+                spans.push(<span key={idx++} style={{ color: YAML_COLORS.string }}>{value}</span>);
+            }
+            // Plain value
+            else {
+                spans.push(<span key={idx++} style={{ color: YAML_COLORS.default }}>{value}</span>);
+            }
+        }
+        return spans;
+    }
+
+    // Plain line (e.g., list items without key:)
+    // Check if it's an action keyword
+    const trimmed = remaining.trim();
+    if (ACTION_KEYWORD_COLORS[trimmed]) {
+        spans.push(<span key={idx++} style={{ color: ACTION_KEYWORD_COLORS[trimmed], fontWeight: 'bold' }}>{remaining}</span>);
+    } else {
+        spans.push(<span key={idx++} style={{ color: YAML_COLORS.default }}>{remaining}</span>);
+    }
+
+    return spans;
+};
 
 const PolicyYamlViewer: React.FC<Props> = ({ kind, name, namespace, tier, ruleIndex, onClose }) => {
     const [yaml, setYaml] = React.useState<string | null>(null);
@@ -177,13 +273,6 @@ const PolicyYamlViewer: React.FC<Props> = ({ kind, name, namespace, tier, ruleIn
                                 i >= highlightedYaml.highlightStart &&
                                 i < highlightedYaml.highlightEnd;
 
-                            // Simple syntax coloring
-                            let color = '#CBD5E0';
-                            if (/^\s*#/.test(line)) color = '#718096';
-                            else if (/^\s*\w+:/.test(line)) color = '#63B3ED';
-                            else if (ACTION_KEYWORDS.some((kw) => line.includes(kw))) color = '#68D391';
-                            else if (/:\s*\d+/.test(line)) color = '#F6AD55';
-
                             return (
                                 <Box
                                     key={i}
@@ -204,9 +293,7 @@ const PolicyYamlViewer: React.FC<Props> = ({ kind, name, namespace, tier, ruleIn
                                     >
                                         {i + 1}
                                     </Text>
-                                    <Text as='span' color={color}>
-                                        {line || ' '}
-                                    </Text>
+                                    {line ? colorizeYaml(line) : <span> </span>}
                                 </Box>
                             );
                         })}
