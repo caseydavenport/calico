@@ -36,9 +36,11 @@ import (
 	"github.com/projectcalico/calico/goldmane/pkg/internal/utils"
 	"github.com/projectcalico/calico/goldmane/pkg/server"
 	"github.com/projectcalico/calico/goldmane/pkg/storage"
+	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
 	"github.com/projectcalico/calico/lib/std/time"
 	"github.com/projectcalico/calico/libcalico-go/lib/debugserver"
 	"github.com/projectcalico/calico/libcalico-go/lib/health"
+	"github.com/projectcalico/calico/pkg/buildinfo"
 )
 
 type Config struct {
@@ -230,6 +232,19 @@ func Run(ctx context.Context, cfg Config) {
 			err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.PrometheusPort), mux)
 			if err != nil {
 				logrus.WithError(err).Fatal("Failed to serve prometheus metrics")
+			}
+		}()
+	}
+
+	otelShutdown, otelErr := otelmetrics.InitFromEnv(ctx, "calico-goldmane", buildinfo.Version)
+	if otelErr != nil {
+		logrus.WithError(otelErr).Error("Failed to initialize OTel metrics bridge, continuing without it")
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := otelShutdown(shutdownCtx); err != nil {
+				logrus.WithError(err).Warn("Error shutting down OTel metrics bridge")
 			}
 		}()
 	}
