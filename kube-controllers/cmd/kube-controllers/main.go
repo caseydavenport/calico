@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2025 Tigera, Inc. All rights reserved.
+// Copyright (c) 2017-2026 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,6 +45,7 @@ import (
 
 	"github.com/projectcalico/calico/crypto/pkg/tls"
 	"github.com/projectcalico/calico/kube-controllers/pkg/config"
+	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
 	"github.com/projectcalico/calico/kube-controllers/pkg/controllers/controller"
 	"github.com/projectcalico/calico/kube-controllers/pkg/controllers/flannelmigration"
 	"github.com/projectcalico/calico/kube-controllers/pkg/controllers/ippool"
@@ -231,6 +232,19 @@ func main() {
 			err := http.ListenAndServe(fmt.Sprintf(":%d", runCfg.PrometheusPort), mux)
 			if err != nil {
 				log.WithError(err).Fatal("Failed to serve prometheus metrics")
+			}
+		}()
+	}
+
+	otelShutdown, otelErr := otelmetrics.InitFromEnv(ctx, "calico-kube-controllers", buildinfo.Version)
+	if otelErr != nil {
+		log.WithError(otelErr).Error("Failed to initialize OTel metrics bridge, continuing without it")
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := otelShutdown(shutdownCtx); err != nil {
+				log.WithError(err).Warn("Error shutting down OTel metrics bridge")
 			}
 		}()
 	}
