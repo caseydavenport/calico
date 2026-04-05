@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2018,2020-2021 Tigera, Inc. All rights reserved.
+// Copyright (c) 2017-2018,2020-2021,2026 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,6 +40,7 @@ import (
 	"github.com/projectcalico/calico/libcalico-go/lib/debugserver"
 	"github.com/projectcalico/calico/libcalico-go/lib/health"
 	"github.com/projectcalico/calico/libcalico-go/lib/metricsserver"
+	otelmetrics "github.com/projectcalico/calico/lib/otel/metrics"
 	"github.com/projectcalico/calico/pkg/buildinfo"
 	"github.com/projectcalico/calico/typha/pkg/calc"
 	"github.com/projectcalico/calico/typha/pkg/config"
@@ -132,6 +133,20 @@ func (t *TyphaDaemon) InitializeAndServeForever(cxt context.Context) error {
 		return err
 	}
 	t.CreateServer()
+
+	otelShutdown, otelErr := otelmetrics.InitFromEnv(cxt, "calico-typha", buildinfo.Version)
+	if otelErr != nil {
+		log.WithError(otelErr).Error("Failed to initialize OTel metrics bridge, continuing without it")
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := otelShutdown(ctx); err != nil {
+				log.WithError(err).Warn("Error shutting down OTel metrics bridge")
+			}
+		}()
+	}
+
 	t.Start(cxt)
 	t.WaitAndShutDown(cxt)
 	return nil
