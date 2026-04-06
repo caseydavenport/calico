@@ -65,6 +65,11 @@ LIBBPF_VERSION=v1.6.2
 # The bpftool image to use; this is the output of the https://github.com/projectcalico/bpftool repo.
 BPFTOOL_IMAGE=calico/bpftool:v7.5.0
 
+# OpenTelemetry Collector version and the matching OpenTelemetry Collector Builder (OCB) version.
+# The OCB version must match the collector version it builds.
+OTEL_COLLECTOR_VERSION=0.149.0
+OCB_VERSION=0.149.0
+
 # The operator branch corresponding to this branch.
 OPERATOR_BRANCH ?= master
 OPERATOR_ORGANIZATION ?= tigera
