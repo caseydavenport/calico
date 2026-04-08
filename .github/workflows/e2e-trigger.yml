@@ -13,7 +13,7 @@ jobs:
   handle-e2e-comment:
     if: >
       github.event.issue.pull_request != null &&
-      startsWith(github.event.comment.body, '/e2e ')
+      (startsWith(github.event.comment.body, '/e2e ') || github.event.comment.body == '/e2e')
     runs-on: ubuntu-latest
 
     env:
@@ -88,9 +88,15 @@ jobs:
           profiles = config.get("profiles", {})
           profile = os.environ.get("PROFILE_INPUT", "")
 
-          if profile not in profiles:
-              names = "\n".join(f"- `{k}`: {v['description']}" for k, v in profiles.items())
+          if not profile:
+              names = "\n".join(f"- `{k}` — {v['description']}" for k, v in profiles.items())
               print(f"profile_invalid=true")
+              print(f"help_mode=true")
+              print(f"available_profiles<<ENDOFPROFILES\n{names}\nENDOFPROFILES")
+          elif profile not in profiles:
+              names = "\n".join(f"- `{k}` — {v['description']}" for k, v in profiles.items())
+              print(f"profile_invalid=true")
+              print(f"help_mode=false")
               print(f"available_profiles<<ENDOFPROFILES\n{names}\nENDOFPROFILES")
           else:
               p = profiles[profile]
@@ -105,13 +111,13 @@ jobs:
           LABEL_FILTER_INPUT: ${{ steps.parse.outputs.label_filter }}
 
       - name: React to comment (invalid profile)
-        if: steps.auth.outputs.authorized == 'true' && steps.validate.outputs.profile_invalid == 'true'
+        if: steps.auth.outputs.authorized == 'true' && steps.validate.outputs.profile_invalid == 'true' && steps.validate.outputs.help_mode == 'false'
         run: |
           gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
             -X POST -f content="-1"
 
       - name: Post invalid profile comment
-        if: steps.auth.outputs.authorized == 'true' && steps.validate.outputs.profile_invalid == 'true'
+        if: steps.auth.outputs.authorized == 'true' && steps.validate.outputs.profile_invalid == 'true' && steps.validate.outputs.help_mode == 'false'
         run: |
           PROFILES="${{ steps.validate.outputs.available_profiles }}"
           PROFILE="${{ steps.parse.outputs.profile }}"
@@ -121,6 +127,22 @@ jobs:
             "body": "❌ Unknown e2e profile \`${PROFILE}\`.\n\nAvailable profiles:\n${PROFILES}\n\nUsage: \`/e2e <profile> [--label-filter=\"<filter>\"]\`"
           }
           EOF
+
+      - name: Post available profiles (help mode)
+        if: steps.auth.outputs.authorized == 'true' && steps.validate.outputs.help_mode == 'true'
+        run: |
+          PROFILES="${{ steps.validate.outputs.available_profiles }}"
+          gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -X POST -f content="eyes"
+          gh pr comment "${{ github.event.issue.number }}" \
+            --body "$(cat <<EOF
+          **Available e2e profiles:**
+
+          ${PROFILES}
+
+          Usage: \`/e2e <profile> [--label-filter="<filter>"]\`
+          EOF
+          )"
 
       - name: React to comment (valid profile)
         if: steps.auth.outputs.authorized == 'true' && steps.validate.outputs.profile_invalid == 'false'
@@ -309,7 +331,7 @@ jobs:
           E2E_IMAGE="${{ steps.check-images.outputs.e2e_image }}"
           LABEL_FILTER="${{ steps.validate.outputs.effective_label_filter }}"
 
-          RESPONSE=$(curl -s -f -X POST \
+          HTTP_CODE=$(curl -s -o /tmp/sem-response.json -w "%{http_code}" -X POST \
             "https://${SEMAPHORE_ORG}.semaphoreci.com/api/v1alpha/plumber-workflows" \
             -H "Authorization: Token ${SEMAPHORE_TOKEN}" \
             -H "Content-Type: application/json" \
@@ -329,6 +351,14 @@ jobs:
           }
           EOF
           )
+
+          RESPONSE=$(cat /tmp/sem-response.json)
+          echo "Semaphore API response (HTTP ${HTTP_CODE}): ${RESPONSE}"
+
+          if [[ "$HTTP_CODE" -ge 400 ]]; then
+            echo "::error::Semaphore API returned HTTP ${HTTP_CODE}: ${RESPONSE}"
+            exit 1
+          fi
 
           WORKFLOW_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['workflow_id'])")
           echo "workflow_id=$WORKFLOW_ID" >> "$GITHUB_OUTPUT"

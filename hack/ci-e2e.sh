@@ -279,7 +279,7 @@ LABEL_FILTER=""
 
 if [[ -n "$ARG_LABEL_FILTER" ]]; then
     LABEL_FILTER="$ARG_LABEL_FILTER"
-else
+elif [[ -t 0 ]]; then
     echo ""
     if [[ -n "$SUGGESTED_LABEL" ]]; then
         printf "Label filter [%s]:\n> " "$SUGGESTED_LABEL"
@@ -292,6 +292,9 @@ else
     else
         LABEL_FILTER="$user_label"
     fi
+else
+    # Non-interactive — use suggestion if available.
+    LABEL_FILTER="${SUGGESTED_LABEL}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -308,8 +311,11 @@ fi
 echo ""
 echo "Triggering: ${CMD} on PR #${PR}"
 
-if [[ -n "$ARG_PROFILE" && -n "$ARG_PR" && -n "$ARG_LABEL_FILTER" ]]; then
-    # All flags provided non-interactively; skip confirmation.
+if [[ ! -t 0 ]]; then
+    # Non-interactive — skip confirmation.
+    CONFIRMED=1
+elif [[ -n "$ARG_PROFILE" && -n "$ARG_PR" && -n "$ARG_LABEL_FILTER" ]]; then
+    # All flags provided explicitly; skip confirmation.
     CONFIRMED=1
 else
     printf "Continue? [Y/n] "
