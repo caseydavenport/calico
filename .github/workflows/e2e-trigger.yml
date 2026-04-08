@@ -214,7 +214,7 @@ jobs:
 
           cat > /tmp/e2e.Dockerfile <<'DOCKERFILE'
           FROM gcr.io/distroless/static:nonroot
-          COPY e2e/bin/e2e.test /e2e.test
+          COPY e2e/bin/k8s/e2e.test /e2e.test
           ENTRYPOINT ["/e2e.test"]
           DOCKERFILE
 
