@@ -1749,7 +1749,7 @@ dev-image-operator:
 ## docker image ID has changed since the last push.
 .PHONY: dev-push
 dev-push: dev-image
-	@pushed=0; skipped=0; \
+	@set -e; pushed=0; skipped=0; \
 	for img in $(DEV_CALICO_IMAGES) $(DEV_OPERATOR_IMAGE); do \
 	  local_id=$$(docker image inspect "$$img" --format '{{.Id}}' 2>/dev/null || echo "none"); \
 	  stamp_name=$$(echo "$$img" | tr '/:' '__'); \
