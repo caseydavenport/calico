@@ -25,6 +25,7 @@ import (
 
 	"github.com/projectcalico/calico/felix/environment"
 	"github.com/projectcalico/calico/felix/generictables"
+	"github.com/projectcalico/calico/felix/ipsets"
 	"github.com/projectcalico/calico/felix/iptables/testutils"
 	"github.com/projectcalico/calico/felix/logutils"
 	"github.com/projectcalico/calico/felix/nftables"
@@ -208,6 +209,43 @@ var _ = Describe("Table with an empty dataplane", func() {
 			Rule:    "counter drop",
 			Comment: ptr("cali:DCGauXoHP5A9-AIO;"),
 		}))
+	})
+
+	It("should reprogram IP sets after a table rebuild", func() {
+		// IP sets live inside the same nftables table as our chains, so a table
+		// rebuild wipes them. Program a set through the embedded IP set dataplane
+		// and confirm it lands.
+		meta := ipsets.IPSetMetadata{SetID: "test", Type: ipsets.IPSetTypeHashIP}
+		table.AddOrReplaceIPSet(meta, []string{"10.0.0.1", "10.0.0.2"})
+		table.ApplyUpdates(nil)
+		sets, err := f.List(context.TODO(), "sets")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sets).To(ConsistOf("cali40test"))
+
+		// Drive the retry loop into the rebuild branch: fail the first six
+		// transactions so the sixth applyUpdates failure triggers a rebuild, then
+		// let the rebuild and the following retry succeed.
+		table.InsertOrAppendRules("filter-FORWARD", []generictables.Rule{
+			{Match: nftables.Match(), Action: nftables.DropAction{}},
+		})
+		f.RunErrors = 6
+		table.Apply()
+		Expect(f.RunErrors).To(Equal(0), "expected all injected failures to be consumed")
+
+		// The rebuild recreated the table empty, so the set is gone.
+		sets, err = f.List(context.TODO(), "sets")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sets).NotTo(ContainElement("cali40test"))
+
+		// The rebuild path should have queued a resync, so the next ApplyUpdates
+		// reprograms the set and its members into the fresh table.
+		table.ApplyUpdates(nil)
+		sets, err = f.List(context.TODO(), "sets")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sets).To(ConsistOf("cali40test"))
+		elems, err := f.ListElements(context.TODO(), "set", "cali40test")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(elems).To(HaveLen(2))
 	})
 
 	Describe("after inserting a rule", func() {

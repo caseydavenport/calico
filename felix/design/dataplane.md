@@ -548,6 +548,14 @@ dataplane, and a change to *either* alone breaks it:
   the same apply as the sweep that finds it; (c) a set whose write
   failed is re-checked at **must** priority before Felix writes to it
   again.
+- In nftables mode the IP sets live *inside* the Calico table (the
+  `Table` and IP set dataplane are the same object). So the
+  `Table.Apply()` recovery path that rebuilds the table on repeated
+  programming errors wipes every set. It queues an IP set resync
+  whenever that rebuild runs, so the sets get reprogrammed into the
+  fresh table. A change to the rebuild path must keep that resync -
+  the in-memory view would otherwise still believe the wiped sets are
+  programmed and never re-add them.
 
 ## Routing drivers
 

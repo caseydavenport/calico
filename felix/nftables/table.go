@@ -944,6 +944,11 @@ func (t *NftablesTable) Apply() (rescheduleAfter time.Duration) {
 					if err := t.runTransaction(tx); err != nil {
 						t.logCxt.WithError(err).Warn("Failed to delete table, continuing anyway")
 					}
+
+					// Rebuilding the table wipes the IP sets that live inside it, but the embedded IP set
+					// dataplane still thinks they're programmed and would never reprogram them. Invalidate
+					// that view so the next ApplyUpdates re-lists the (now empty) table and reprograms the sets.
+					t.IPSetsDataplane.QueueResync()
 				}
 
 				// Reload the data plane state in case we're out of sync.
