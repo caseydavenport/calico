@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Tigera, Inc. All rights reserved.
+// Copyright (c) 2025-2026 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -425,5 +425,25 @@ func BenchmarkDiachronicFlow_AddFlowDuplicateIPs(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		storage.NewDiachronicFlow(k, 0).AddFlow(f, 0, ipTestInterval)
+	}
+}
+
+// BenchmarkDiachronicFlow_AddFlowChurningIPs adds a full set of new source IPs every window, so each
+// IP added to the capped set evicts one.
+func BenchmarkDiachronicFlow_AddFlowChurningIPs(b *testing.B) {
+	k := ipTestFlowKey()
+	df := storage.NewDiachronicFlow(k, 0)
+	batches := make([][]string, 4)
+	for i := range batches {
+		batches[i] = distinctIPs(i*storage.MaxIPsPerFlow, storage.MaxIPsPerFlow)
+	}
+	window := 0
+	b.ReportAllocs()
+	for b.Loop() {
+		start := int64(window * ipTestInterval)
+		f := &types.Flow{Key: k, SourceLabels: unique.Make(""), DestLabels: unique.Make(""), SourceIps: batches[window%len(batches)]}
+		df.AddFlow(f, start, start+ipTestInterval)
+		df.Rollover(start - 200*ipTestInterval)
+		window++
 	}
 }

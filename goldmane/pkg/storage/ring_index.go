@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Tigera, Inc. All rights reserved.
+// Copyright (c) 2025-2026 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,8 +51,14 @@ func (a *RingIndex) List(opts IndexFindOpts) ([]*types.Flow, types.ListMeta) {
 	// use DiachronicFlow data to combine statistics together for each key across the time range.
 	keys := a.agg.FlowSet(opts.startTimeGt, opts.startTimeLt)
 
-	// Aggregate the relevant DiachronicFlows across the time range.
-	flowsByKey := map[types.FlowKey]*types.Flow{}
+	// Aggregate the relevant DiachronicFlows across the time range. Each DiachronicFlow has a
+	// distinct key, so this yields one flow per key.
+	type match struct {
+		flow       *types.Flow
+		diachronic *DiachronicFlow
+		windows    []*Window
+	}
+	var matches []match
 	for d := range keys.All() {
 		logCtx := logrus.WithField("id", d.ID)
 		if logrus.IsLevelEnabled(logrus.DebugLevel) {
@@ -62,27 +68,21 @@ func (a *RingIndex) List(opts IndexFindOpts) ([]*types.Flow, types.ListMeta) {
 		logCtx.WithFields(logrus.Fields{"filter": opts.filter}).Debug("Checking if flow matches filter")
 		if d.Matches(opts.filter, opts.startTimeGt, opts.startTimeLt) {
 			logCtx.Debug("Flow matches filter")
-			flow := d.Aggregate(opts.startTimeGt, opts.startTimeLt)
+			flow, windows := d.aggregate(opts.startTimeGt, opts.startTimeLt)
 			if flow != nil {
 				logCtx.Debug("Aggregated flow")
-				flowsByKey[*flow.Key] = flow
+				matches = append(matches, match{flow: flow, diachronic: d, windows: windows})
 			}
 		}
 	}
 
-	// Convert the map to a slice.
-	flows := []*types.Flow{}
-	for _, flow := range flowsByKey {
-		flows = append(flows, flow)
-	}
-
 	// Sort the flows by start time, sorting newer flows first.
-	sort.Slice(flows, func(i, j int) bool {
-		return flows[i].StartTime > flows[j].StartTime
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].flow.StartTime > matches[j].flow.StartTime
 	})
 
 	// Assign the total before the result is trimmed to match the page size and start page.
-	totalFlows := len(flows)
+	totalFlows := len(matches)
 
 	// If pagination was requested, apply it now after sorting.
 	// This is a bit inneficient - we collect more data than we need to return -
@@ -90,23 +90,28 @@ func (a *RingIndex) List(opts IndexFindOpts) ([]*types.Flow, types.ListMeta) {
 	if opts.pageSize > 0 {
 		startIdx := (opts.page) * opts.pageSize
 		endIdx := startIdx + opts.pageSize
-		if startIdx >= int64(len(flows)) {
+		if startIdx >= int64(len(matches)) {
 			return nil, types.ListMeta{}
 		}
-		if endIdx > int64(len(flows)) {
-			endIdx = int64(len(flows))
+		if endIdx > int64(len(matches)) {
+			endIdx = int64(len(matches))
 		}
 		logrus.WithFields(logrus.Fields{
 			"pageSize":   opts.pageSize,
 			"pageNumber": opts.page,
 			"startIdx":   startIdx,
 			"endIdx":     endIdx,
-			"total":      len(flows),
+			"total":      len(matches),
 		}).Debug("Returning paginated flows")
 
-		flows = flows[startIdx:endIdx]
+		matches = matches[startIdx:endIdx]
 	}
 
+	flows := make([]*types.Flow, 0, len(matches))
+	for _, m := range matches {
+		m.flow.SourceIps, m.flow.DestIps = m.diachronic.ipsForWindows(m.windows)
+		flows = append(flows, m.flow)
+	}
 	return flows, calculateListMeta(totalFlows, int(opts.pageSize))
 }
 
@@ -141,7 +146,7 @@ func (a *RingIndex) FilterValueSet(valueFunc func(*types.FlowKey) []string, opts
 		}
 		if d.Matches(opts.filter, opts.startTimeGt, opts.startTimeLt) {
 			logrus.Debug("Flow matches filter")
-			flow := d.Aggregate(opts.startTimeGt, opts.startTimeLt)
+			flow, _ := d.aggregate(opts.startTimeGt, opts.startTimeLt)
 			if flow != nil {
 				if logrus.IsLevelEnabled(logrus.DebugLevel) {
 					logrus.WithFields(flow.Key.Fields()).Debug("Aggregated flow")

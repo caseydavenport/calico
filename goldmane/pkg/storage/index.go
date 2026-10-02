@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Tigera, Inc. All rights reserved.
+// Copyright (c) 2025-2026 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -75,7 +75,7 @@ func (idx *index[E]) List(opts IndexFindOpts) ([]*types.Flow, types.ListMeta) {
 
 	// Iterate through the DiachronicFlows and evaluate each one until we reach the limit or the end of the list.
 	for _, diachronic := range idx.diachronics {
-		flow := idx.evaluate(diachronic, opts)
+		flow, windows := idx.evaluate(diachronic, opts)
 		if flow != nil {
 			// increment the count regardless of whether we're including the key, as we need a total matching count.
 			totalMatchedCount++
@@ -84,6 +84,7 @@ func (idx *index[E]) List(opts IndexFindOpts) ([]*types.Flow, types.ListMeta) {
 			// - We're not performing a paginated search.
 			// - We are performing a paginated search, and it falls within the page bounds.
 			if totalMatchedCount > pageStart && (opts.pageSize == 0 || int64(len(matchedFlows)) < opts.pageSize) {
+				flow.SourceIps, flow.DestIps = diachronic.ipsForWindows(windows)
 				matchedFlows = append(matchedFlows, flow)
 			}
 		}
@@ -106,7 +107,7 @@ func (idx *index[E]) SortValueSet(opts IndexFindOpts) ([]E, types.ListMeta) {
 
 	// Iterate through the DiachronicFlows and evaluate each one until we reach the limit or the end of the list.
 	for _, diachronic := range idx.diachronics {
-		flow := idx.evaluate(diachronic, opts)
+		flow, _ := idx.evaluate(diachronic, opts)
 		if flow != nil {
 			sortValue := idx.sortValueFunc(&diachronic.Key)
 			// If the previous sortValue does not equal the current sortValue we know that we haven't seen this sortValue
@@ -238,9 +239,10 @@ func (idx *index[E]) lookup(d *DiachronicFlow) int {
 }
 
 // evaluate evaluates the given DiachronicFlow and returns the Flow that matches the given options, or nil if no match is found.
-func (idx *index[E]) evaluate(c *DiachronicFlow, opts IndexFindOpts) *types.Flow {
+// The Flow has no IP sets; the returned windows let a caller build them.
+func (idx *index[E]) evaluate(c *DiachronicFlow, opts IndexFindOpts) (*types.Flow, []*Window) {
 	if c.Matches(opts.filter, opts.startTimeGt, opts.startTimeLt) {
-		return c.Aggregate(opts.startTimeGt, opts.startTimeLt)
+		return c.aggregate(opts.startTimeGt, opts.startTimeLt)
 	}
-	return nil
+	return nil, nil
 }

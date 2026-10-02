@@ -163,8 +163,7 @@ func (d *DiachronicFlow) Rollover(limiter int64) {
 // expireWindows clears the bitmap slot of each expiring window from every tracked IP, and drops any
 // IP that is no longer present in any live window.
 func (d *DiachronicFlow) expireWindows(expired []Window) {
-	d.ipsMu.Lock()
-	defer d.ipsMu.Unlock()
+	// Only the main loop writes the maps, so it can check their size without the lock.
 	if len(d.sourceIPs) == 0 && len(d.destIPs) == 0 {
 		return
 	}
@@ -172,6 +171,8 @@ func (d *DiachronicFlow) expireWindows(expired []Window) {
 	for i := range expired {
 		mask.set(bitIndex(expired[i].start, expired[i].end))
 	}
+	d.ipsMu.Lock()
+	defer d.ipsMu.Unlock()
 	clearSlots(d.sourceIPs, &mask)
 	clearSlots(d.destIPs, &mask)
 }
@@ -296,15 +297,21 @@ func (d *DiachronicFlow) appendWindow(flow *types.Flow, start, end int64) {
 
 // Aggregate aggregates the statistics from the DiachronicFlow into a new Flow object over the specified time range.
 func (d *DiachronicFlow) Aggregate(startGte, startLt int64) *types.Flow {
-	if !d.Within(startGte, startLt) {
-		return nil
-	}
-	windows := d.GetWindows(startGte, startLt)
-	f := d.AggregateWindows(windows)
+	f, windows := d.aggregate(startGte, startLt)
 	if f != nil {
 		f.SourceIps, f.DestIps = d.ipsForWindows(windows)
 	}
 	return f
+}
+
+// aggregate is Aggregate without the IP sets, which cost more to build than the statistics. Use it
+// for flows that are only filtered or counted, and pass the windows to ipsForWindows for the rest.
+func (d *DiachronicFlow) aggregate(startGte, startLt int64) (*types.Flow, []*Window) {
+	if !d.Within(startGte, startLt) {
+		return nil, nil
+	}
+	windows := d.GetWindows(startGte, startLt)
+	return d.AggregateWindows(windows), windows
 }
 
 // GetWindows returns a slice of Windows that fall within the specified time range.
