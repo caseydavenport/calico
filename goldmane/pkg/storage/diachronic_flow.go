@@ -15,7 +15,6 @@
 package storage
 
 import (
-	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -475,42 +474,93 @@ func (d *DiachronicFlow) recordIPs(flow *types.Flow, start, end int64) {
 func recordIPSet(m map[string]*ipEntry, ips []string, slot int, start int64) map[string]*ipEntry {
 	// Refresh already-tracked IPs first, so a new IP earlier in ips can't evict one that this flow
 	// has just seen again (which would discard its history from earlier windows).
-	for _, ip := range ips {
-		if e, ok := m[ip]; ok {
-			e.windows.set(slot)
-			e.lastSeen = max(e.lastSeen, start)
-		}
-	}
+	var fresh []string
 	for _, ip := range ips {
 		if ip == "" {
 			continue
 		}
 		if e, ok := m[ip]; ok {
-			// Refreshed above, or a duplicate within ips.
 			e.windows.set(slot)
+			e.lastSeen = max(e.lastSeen, start)
 			continue
 		}
-		if m == nil {
-			m = make(map[string]*ipEntry, min(len(ips), MaxIPsPerFlow))
+		fresh = append(fresh, ip)
+	}
+	if len(fresh) == 0 {
+		return m
+	}
+	if m == nil {
+		m = make(map[string]*ipEntry, min(len(fresh), MaxIPsPerFlow))
+	}
+	if len(m)+len(fresh) > MaxIPsPerFlow {
+		slices.Sort(fresh)
+		fresh = slices.Compact(fresh)
+	}
+	if len(m)+len(fresh) <= MaxIPsPerFlow {
+		for _, ip := range fresh {
+			addIPEntry(m, ip, slot, start)
 		}
-		if len(m) >= MaxIPsPerFlow {
-			oldestIP, oldest := "", int64(math.MaxInt64)
-			for k, e := range m {
-				// Break ties on the address so eviction is deterministic.
-				if e.lastSeen < oldest || (e.lastSeen == oldest && k < oldestIP) {
-					oldestIP, oldest = k, e.lastSeen
-				}
-			}
-			if oldest > start || (oldest == start && ip < oldestIP) {
-				continue
-			}
-			delete(m, oldestIP)
+		return m
+	}
+
+	// The result is the top MaxIPsPerFlow of the union by (lastSeen, address). lastSeen is a window
+	// start, so sort integers to find the cutoff window and compare addresses only within it.
+	seen := make([]int64, 0, len(m)+len(fresh))
+	for _, e := range m {
+		seen = append(seen, e.lastSeen)
+	}
+	for range fresh {
+		seen = append(seen, start)
+	}
+	slices.Sort(seen)
+	overflow := len(seen) - MaxIPsPerFlow
+	cutoff := seen[overflow-1]
+	below, _ := slices.BinarySearch(seen, cutoff)
+
+	var tie []string
+	for ip, e := range m {
+		switch {
+		case e.lastSeen < cutoff:
+			delete(m, ip)
+		case e.lastSeen == cutoff:
+			tie = append(tie, ip)
 		}
-		e := &ipEntry{lastSeen: start}
-		e.windows.set(slot)
-		m[ip] = e
+	}
+	if start == cutoff {
+		tie = append(tie, fresh...)
+	}
+	evict := overflow - below
+	if evict < len(tie) {
+		slices.Sort(tie)
+	}
+	for _, ip := range tie[:evict] {
+		delete(m, ip)
+	}
+
+	switch {
+	case start > cutoff:
+		for _, ip := range fresh {
+			addIPEntry(m, ip, slot, start)
+		}
+	case start == cutoff:
+		for _, ip := range tie[evict:] {
+			if _, ok := m[ip]; !ok {
+				addIPEntry(m, ip, slot, start)
+			}
+		}
 	}
 	return m
+}
+
+func addIPEntry(m map[string]*ipEntry, ip string, slot int, start int64) {
+	if e, ok := m[ip]; ok {
+		// A duplicate within the incoming IPs.
+		e.windows.set(slot)
+		return
+	}
+	e := &ipEntry{lastSeen: start}
+	e.windows.set(slot)
+	m[ip] = e
 }
 
 // ipsForWindows returns the sorted source and destination IPs seen in any of the given windows.
