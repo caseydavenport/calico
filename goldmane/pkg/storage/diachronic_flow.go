@@ -522,8 +522,9 @@ func recordIPSet(m map[string]*ipEntry, ips []string, slot int, start int64) map
 	slices.Sort(seen)
 	overflow := len(seen) - MaxIPsPerFlow
 	cutoff := seen[overflow-1]
-	below, _ := slices.BinarySearch(seen, cutoff)
+	numOlder, _ := slices.BinarySearch(seen, cutoff)
 
+	// Evict every entry older than the cutoff window, then the lowest addresses within it.
 	var tie []string
 	for ip, e := range m {
 		switch {
@@ -536,21 +537,22 @@ func recordIPSet(m map[string]*ipEntry, ips []string, slot int, start int64) map
 	if start == cutoff {
 		tie = append(tie, fresh...)
 	}
-	evict := overflow - below
-	if evict < len(tie) {
+	numTieEvicted := overflow - numOlder
+	if numTieEvicted < len(tie) {
 		slices.Sort(tie)
 	}
-	for _, ip := range tie[:evict] {
+	for _, ip := range tie[:numTieEvicted] {
 		delete(m, ip)
 	}
 
+	// Add the incoming IPs that survived.
 	switch {
 	case start > cutoff:
 		for _, ip := range fresh {
 			addIPEntry(m, ip, slot, start)
 		}
 	case start == cutoff:
-		for _, ip := range tie[evict:] {
+		for _, ip := range tie[numTieEvicted:] {
 			if _, ok := m[ip]; !ok {
 				addIPEntry(m, ip, slot, start)
 			}
