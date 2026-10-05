@@ -108,8 +108,9 @@ a flow are carried as **bounded sets on the `Flow` message** (`source_ips`,
   `FlowUpdate`.
 - Goldmane keeps one set per `DiachronicFlow` (i.e. per key), **capped at
   `storage.MaxIPsPerFlow` (100) entries**, with a per-IP bitmap of the windows
-  it was seen in so range queries stay exact. When full, the least-recently-seen
-  IP is evicted, so the sets are best-effort, not exhaustive.
+  it was seen in so range queries stay exact. A window's IPs are staged until it
+  closes, one window after it ends, and then the least-recently-seen IPs beyond
+  the cap are evicted, so the sets are best-effort, not exhaustive.
 - The sets are surfaced to consumers via the `Flows` API and the Whisker
   backend (`source_ips` / `dest_ips` JSON fields).
 
@@ -125,6 +126,9 @@ value. This can be revisited if a compelling use case arises.
   per-flow footprint at scale. Benchmark before raising it.
 - The IP window bitmap has `windowSlots` (256) bits; history (`numBuckets`) must
   stay below that or windows share a bit and range queries over-report.
+- HA replicas get separate flow streams, so which IPs are kept must not depend on
+  arrival order: evict only when a window closes, ranked by window and a stable hash
+  (`ipHash`). Flows later than `ipWindowCloseLag` intervals add no IPs.
 - A change to any of the five concepts above — bucket layout,
   rollover cadence, emit semantics, sink reload protocol — is a
   protocol-level change. Callers (Felix's flow reporter, Whisker,

@@ -32,6 +32,10 @@ var ErrStopBucketIteration = errors.New("stop bucket iteration")
 
 type lookupFn func(key types.FlowKey) *DiachronicFlow
 
+// ipWindowCloseLag is how many intervals a window's IPs stay open for flows that arrive late. Replicas
+// each get their own stream of flows, so they agree on the kept IPs only for flows no later than this.
+const ipWindowCloseLag = 1
+
 type BucketRing struct {
 	// buckets is a ring buffer of aggregation buckets for efficient rollover.
 	buckets   []*AggregationBucket
@@ -83,6 +87,10 @@ type BucketRing struct {
 
 	// dedupBuckets is how many buckets back from the head keep their dedup state.
 	dedupBuckets int
+
+	// ipsClosedThrough is the start of the newest window whose IPs have closed. Later flows for that
+	// window or older ones add statistics but not IPs.
+	ipsClosedThrough int64
 }
 
 func NewBucketRing(n, interval int, now int64, opts ...BucketRingOption) *BucketRing {
@@ -323,6 +331,10 @@ func (r *BucketRing) Rollover(sink Sink) int64 {
 	// can drop its dedup state.
 	r.buckets[r.bucketIndexBehind(r.dedupBuckets)].forgetEmissions()
 
+	// The head bucket is one interval ahead, so the window that just ended starts two intervals
+	// before the new head; close the one ipWindowCloseLag intervals before that.
+	r.closeIPWindows(startTime - int64((2+ipWindowCloseLag)*r.interval))
+
 	// Update DiachronicFlows. We need to remove any windows from the DiachronicFlows that have expired.
 	// Find the oldest bucket's start time and remove any data from the DiachronicFlows that is older than that.
 	for d := range flows.All() {
@@ -348,6 +360,18 @@ func (r *BucketRing) Rollover(sink Sink) int64 {
 	}
 
 	return startTime
+}
+
+// closeIPWindows closes the IPs of the window starting at start.
+func (r *BucketRing) closeIPWindows(start int64) {
+	r.ipsClosedThrough = start
+	_, b := r.findBucket(start)
+	if b == nil || b.StartTime != start || b.Flows == nil {
+		return
+	}
+	for d := range b.Flows.All() {
+		d.closeIPWindows(start)
+	}
 }
 
 // FlowFromNode pairs a flow with the node that reported it. The node is not part of the
@@ -404,7 +428,7 @@ func (r *BucketRing) AddFlow(f FlowFromNode) bool {
 		return true
 	}
 
-	d.AddFlow(flow, bucket.StartTime, bucket.EndTime)
+	d.addFlow(flow, bucket.StartTime, bucket.EndTime, bucket.StartTime > r.ipsClosedThrough)
 
 	if logrus.IsLevelEnabled(logrus.DebugLevel) {
 		logrus.WithFields(bucket.Fields()).WithField("flowStart", flow.StartTime).WithField("head", r.headIndex).Debug("Adding flow to bucket")

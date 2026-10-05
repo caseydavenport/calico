@@ -15,7 +15,6 @@
 package storage
 
 import (
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -43,18 +42,18 @@ type DiachronicFlow struct {
 	// flow (i.e. this FlowKey) across all of its windows. Each address records which windows it was
 	// seen in via a bitmap, so a time-range query returns exactly the addresses seen in that range.
 	//
-	// ipsMu guards both maps: they are written by the main loop but also read by stream goroutines
+	// ipsMu guards both sets: they are written by the main loop but also read by stream goroutines
 	// building flows via DeferredFlowBuilder, and a concurrent map read/write is fatal.
 	ipsMu     sync.RWMutex
-	sourceIPs map[string]*ipEntry
-	destIPs   map[string]*ipEntry
+	sourceIPs ipSet
+	destIPs   ipSet
 }
 
 // MaxIPsPerFlow bounds the number of distinct source (or destination) IP addresses retained per
 // DiachronicFlow, i.e. per FlowKey. A single FlowKey aggregates traffic from many connections
 // (across nodes and time), so each IP set is capped to keep memory and wire size bounded. When the
-// cap is reached, the least-recently-seen address is evicted to make room for a newly observed one,
-// so the sets are best-effort (most-recent-wins) rather than exhaustive.
+// cap is reached when a window closes, the least-recently-seen addresses are evicted, so the sets are
+// best-effort (most-recent-wins) rather than exhaustive.
 const MaxIPsPerFlow = 100
 
 // windowSlots is the number of per-window bits tracked for each retained IP. Goldmane keeps at most
@@ -79,13 +78,6 @@ func (s *windowSet) clearAll(mask *windowSet) {
 // intersects reports whether this set shares any slot with other.
 func (s *windowSet) intersects(other *windowSet) bool {
 	return s[0]&other[0]|s[1]&other[1]|s[2]&other[2]|s[3]&other[3] != 0
-}
-
-// ipEntry records the windows an IP was seen in, plus the newest such window (lastSeen), which
-// drives most-recent-wins eviction once the per-key cap is reached.
-type ipEntry struct {
-	windows  windowSet
-	lastSeen int64
 }
 
 // bitIndex maps a window (identified by its [start, end) bounds) to its slot. Windows are aligned to
@@ -163,8 +155,8 @@ func (d *DiachronicFlow) Rollover(limiter int64) {
 // expireWindows clears the bitmap slot of each expiring window from every tracked IP, and drops any
 // IP that is no longer present in any live window.
 func (d *DiachronicFlow) expireWindows(expired []Window) {
-	// Only the main loop writes the maps, so it can check their size without the lock.
-	if len(d.sourceIPs) == 0 && len(d.destIPs) == 0 {
+	// Only the main loop writes the sets, so it can check their size without the lock.
+	if d.sourceIPs.len() == 0 && d.destIPs.len() == 0 {
 		return
 	}
 	var mask windowSet
@@ -173,17 +165,8 @@ func (d *DiachronicFlow) expireWindows(expired []Window) {
 	}
 	d.ipsMu.Lock()
 	defer d.ipsMu.Unlock()
-	clearSlots(d.sourceIPs, &mask)
-	clearSlots(d.destIPs, &mask)
-}
-
-func clearSlots(m map[string]*ipEntry, mask *windowSet) {
-	for ip, e := range m {
-		e.windows.clearAll(mask)
-		if e.windows.empty() {
-			delete(m, ip)
-		}
-	}
+	d.sourceIPs.expire(&mask)
+	d.destIPs.expire(&mask)
 }
 
 func (d *DiachronicFlow) Empty() bool {
@@ -191,6 +174,12 @@ func (d *DiachronicFlow) Empty() bool {
 }
 
 func (d *DiachronicFlow) AddFlow(flow *types.Flow, start, end int64) {
+	d.addFlow(flow, start, end, true)
+}
+
+// addFlow is AddFlow, optionally ignoring the flow's IPs. BucketRing ignores them once the flow's
+// window has closed, since replicas that saw the flow in time have already decided which IPs to keep.
+func (d *DiachronicFlow) addFlow(flow *types.Flow, start, end int64, withIPs bool) {
 	if logrus.IsLevelEnabled(logrus.DebugLevel) {
 		logrus.WithFields(d.Key.Fields()).WithFields(logrus.Fields{
 			"flow":   flow,
@@ -199,7 +188,9 @@ func (d *DiachronicFlow) AddFlow(flow *types.Flow, start, end int64) {
 	}
 
 	// IPs are tracked per DiachronicFlow rather than per Window; see sourceIPs.
-	d.recordIPs(flow, start, end)
+	if withIPs {
+		d.recordIPs(flow, start, end)
+	}
 
 	if len(d.Windows) == 0 {
 		// This is the first Window, so create it.
@@ -462,7 +453,8 @@ func sortedCSVIntersection(a, b string) string {
 	return buf.String()
 }
 
-// recordIPs marks each of the flow's source / destination IPs as seen in the window [start, end).
+// recordIPs stages each of the flow's source / destination IPs in the window [start, end). They
+// count toward the cap once closeIPWindows closes that window.
 func (d *DiachronicFlow) recordIPs(flow *types.Flow, start, end int64) {
 	if len(flow.SourceIps) == 0 && len(flow.DestIps) == 0 {
 		return
@@ -470,129 +462,29 @@ func (d *DiachronicFlow) recordIPs(flow *types.Flow, start, end int64) {
 	slot := bitIndex(start, end)
 	d.ipsMu.Lock()
 	defer d.ipsMu.Unlock()
-	d.sourceIPs = recordIPSet(d.sourceIPs, flow.SourceIps, slot, start)
-	d.destIPs = recordIPSet(d.destIPs, flow.DestIps, slot, start)
+	d.sourceIPs.stage(flow.SourceIps, slot, start)
+	d.destIPs.stage(flow.DestIps, slot, start)
 }
 
-// recordIPSet adds ips to m against the given window slot, lazily allocating m. When m is full, the
-// least-recently-seen entry is evicted to make room, unless the incoming window is older than every
-// retained entry (e.g. a late-arriving flow for an old window), in which case the new IP is dropped.
-// Entries seen in the same window are equally recent; the lowest address, including incoming IPs, is dropped.
-func recordIPSet(m map[string]*ipEntry, ips []string, slot int, start int64) map[string]*ipEntry {
-	// Refresh already-tracked IPs first, so a new IP earlier in ips can't evict one that this flow
-	// has just seen again (which would discard its history from earlier windows).
-	var fresh []string
-	for _, ip := range ips {
-		if ip == "" {
-			continue
-		}
-		if e, ok := m[ip]; ok {
-			e.windows.set(slot)
-			e.lastSeen = max(e.lastSeen, start)
-			continue
-		}
-		fresh = append(fresh, ip)
-	}
-	if len(fresh) == 0 {
-		return m
-	}
-	if m == nil {
-		m = make(map[string]*ipEntry, min(len(fresh), MaxIPsPerFlow))
-	}
-	if len(m)+len(fresh) > MaxIPsPerFlow {
-		slices.Sort(fresh)
-		fresh = slices.Compact(fresh)
-	}
-	if len(m)+len(fresh) <= MaxIPsPerFlow {
-		for _, ip := range fresh {
-			addIPEntry(m, ip, slot, start)
-		}
-		return m
-	}
-
-	// The result is the top MaxIPsPerFlow of the union by (lastSeen, address). lastSeen is a window
-	// start, so sort integers to find the cutoff window and compare addresses only within it.
-	seen := make([]int64, 0, len(m)+len(fresh))
-	for _, e := range m {
-		seen = append(seen, e.lastSeen)
-	}
-	for range fresh {
-		seen = append(seen, start)
-	}
-	slices.Sort(seen)
-	overflow := len(seen) - MaxIPsPerFlow
-	cutoff := seen[overflow-1]
-	numOlder, _ := slices.BinarySearch(seen, cutoff)
-
-	// Evict every entry older than the cutoff window, then the lowest addresses within it.
-	var tie []string
-	for ip, e := range m {
-		switch {
-		case e.lastSeen < cutoff:
-			delete(m, ip)
-		case e.lastSeen == cutoff:
-			tie = append(tie, ip)
-		}
-	}
-	if start == cutoff {
-		tie = append(tie, fresh...)
-	}
-	numTieEvicted := overflow - numOlder
-	if numTieEvicted < len(tie) {
-		slices.Sort(tie)
-	}
-	for _, ip := range tie[:numTieEvicted] {
-		delete(m, ip)
-	}
-
-	// Add the incoming IPs that survived.
-	switch {
-	case start > cutoff:
-		for _, ip := range fresh {
-			addIPEntry(m, ip, slot, start)
-		}
-	case start == cutoff:
-		for _, ip := range tie[numTieEvicted:] {
-			if _, ok := m[ip]; !ok {
-				addIPEntry(m, ip, slot, start)
-			}
-		}
-	}
-	return m
-}
-
-func addIPEntry(m map[string]*ipEntry, ip string, slot int, start int64) {
-	if e, ok := m[ip]; ok {
-		// A duplicate within the incoming IPs.
-		e.windows.set(slot)
-		return
-	}
-	e := &ipEntry{lastSeen: start}
-	e.windows.set(slot)
-	m[ip] = e
+// closeIPWindows closes every window starting at or before start, merging its staged IPs into the
+// kept sets and trimming them to MaxIPsPerFlow.
+func (d *DiachronicFlow) closeIPWindows(start int64) {
+	d.ipsMu.Lock()
+	defer d.ipsMu.Unlock()
+	d.sourceIPs.closeThrough(start)
+	d.destIPs.closeThrough(start)
 }
 
 // ipsForWindows returns the sorted source and destination IPs seen in any of the given windows.
 func (d *DiachronicFlow) ipsForWindows(windows []*Window) (src, dst []string) {
 	d.ipsMu.RLock()
 	defer d.ipsMu.RUnlock()
-	if len(d.sourceIPs) == 0 && len(d.destIPs) == 0 {
+	if d.sourceIPs.len() == 0 && d.destIPs.len() == 0 {
 		return nil, nil
 	}
 	var mask windowSet
 	for _, w := range windows {
 		mask.set(bitIndex(w.start, w.end))
 	}
-	return ipsMatching(d.sourceIPs, &mask), ipsMatching(d.destIPs, &mask)
-}
-
-func ipsMatching(m map[string]*ipEntry, mask *windowSet) []string {
-	var ips []string
-	for ip, e := range m {
-		if e.windows.intersects(mask) {
-			ips = append(ips, ip)
-		}
-	}
-	slices.Sort(ips)
-	return ips
+	return d.sourceIPs.matching(&mask), d.destIPs.matching(&mask)
 }
