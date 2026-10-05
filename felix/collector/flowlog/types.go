@@ -630,12 +630,18 @@ func keepIPs(ips map[[16]byte]struct{}) []string {
 	return out
 }
 
+// FNV-1a parameters. Hashing inline avoids hash/fnv's per-call allocation.
+const (
+	fnvOffset64 = 14695981039346656037
+	fnvPrime64  = 1099511628211
+)
+
 // ipHash is 64-bit FNV-1a over the address bytes.
 func ipHash(ip [16]byte) uint64 {
-	h := uint64(14695981039346656037)
+	h := uint64(fnvOffset64)
 	for _, c := range ip {
 		h ^= uint64(c)
-		h *= 1099511628211
+		h *= fnvPrime64
 	}
 	return h
 }

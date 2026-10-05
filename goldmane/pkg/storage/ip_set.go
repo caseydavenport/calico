@@ -169,13 +169,19 @@ func trimStaged(ips map[string]struct{}) {
 	}
 }
 
+// FNV-1a parameters. Hashing inline avoids hash/fnv's per-call allocation.
+const (
+	fnvOffset64 = 14695981039346656037
+	fnvPrime64  = 1099511628211
+)
+
 // ipHash is 64-bit FNV-1a. It must give the same value in every process and release, since replicas
 // use it to agree on which IPs to keep.
 func ipHash(ip string) uint64 {
-	h := uint64(14695981039346656037)
+	h := uint64(fnvOffset64)
 	for i := 0; i < len(ip); i++ {
 		h ^= uint64(ip[i])
-		h *= 1099511628211
+		h *= fnvPrime64
 	}
 	return h
 }

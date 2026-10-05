@@ -51,8 +51,8 @@ type DiachronicFlow struct {
 
 // MaxIPsPerFlow bounds the number of distinct source (or destination) IP addresses retained per
 // DiachronicFlow, i.e. per FlowKey. A single FlowKey aggregates traffic from many connections
-// (across nodes and time), so each IP set is capped to keep memory and wire size bounded. When the
-// cap is reached when a window closes, the least-recently-seen addresses are evicted, so the sets are
+// (across nodes and time), so each IP set is capped to keep memory and wire size bounded. When a
+// window closes past the cap, the least-recently-seen addresses are evicted, so the sets are
 // best-effort (most-recent-wins) rather than exhaustive.
 const MaxIPsPerFlow = 100
 

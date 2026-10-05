@@ -333,7 +333,7 @@ func (r *BucketRing) Rollover(sink Sink) int64 {
 
 	// The head bucket is one interval ahead, so the window that just ended starts two intervals
 	// before the new head; close the one ipWindowCloseLag intervals before that.
-	r.closeIPWindows(startTime - int64((2+ipWindowCloseLag)*r.interval))
+	r.closeIPWindow(startTime - int64((2+ipWindowCloseLag)*r.interval))
 
 	// Update DiachronicFlows. We need to remove any windows from the DiachronicFlows that have expired.
 	// Find the oldest bucket's start time and remove any data from the DiachronicFlows that is older than that.
@@ -362,8 +362,8 @@ func (r *BucketRing) Rollover(sink Sink) int64 {
 	return startTime
 }
 
-// closeIPWindows closes the IPs of the window starting at start.
-func (r *BucketRing) closeIPWindows(start int64) {
+// closeIPWindow closes the IPs of the window starting at start.
+func (r *BucketRing) closeIPWindow(start int64) {
 	r.ipsClosedThrough = start
 	_, b := r.findBucket(start)
 	if b == nil || b.StartTime != start || b.Flows == nil {

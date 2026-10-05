@@ -115,3 +115,48 @@ func listIPs(t *testing.T, ring *storage.BucketRing, gte, lt int64) map[string][
 	}
 	return out
 }
+
+// TestBucketRing_LateFlowAddsStatsNotIPs verifies a flow that arrives after its window's IPs closed
+// still counts toward the window's statistics, but adds no IPs.
+func TestBucketRing_LateFlowAddsStatsNotIPs(t *testing.T) {
+	defer setupTest(t)()
+
+	start := int64(1_000_000)
+	now := start
+	ring := storage.NewBucketRing(242, ipTestInterval, now, storage.WithNowFunc(func() time.Time { return time.Unix(now, 0) }))
+	key := types.NewFlowKey(
+		&types.FlowKeySource{SourceName: "src"},
+		&types.FlowKeyDestination{DestName: "dst"},
+		&types.FlowKeyMeta{},
+		&proto.PolicyTrace{},
+	)
+	send := func(ip string) {
+		ring.AddFlow(storage.FlowFromNode{Flow: &types.Flow{
+			Key:          key,
+			StartTime:    start,
+			EndTime:      start + ipTestInterval,
+			SourceLabels: unique.Make(""),
+			DestLabels:   unique.Make(""),
+			PacketsIn:    1,
+			SourceIps:    []string{ip},
+		}})
+	}
+	roll := func() {
+		ring.Rollover(nil)
+		now += ipTestInterval
+	}
+
+	// On time, then exactly one window late (still open), then two windows late (closed).
+	send("10.0.0.1")
+	roll()
+	send("10.0.0.2")
+	roll()
+	send("10.0.0.3")
+	roll()
+
+	flows, _, err := ring.List(&proto.FlowListRequest{StartTimeGte: start, StartTimeLt: start + ipTestInterval + 1})
+	require.NoError(t, err)
+	require.Len(t, flows, 1)
+	require.Equal(t, int64(3), flows[0].PacketsIn, "every flow counts toward the statistics")
+	require.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, flows[0].SourceIps)
+}
