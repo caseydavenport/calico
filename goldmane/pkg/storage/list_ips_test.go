@@ -42,11 +42,10 @@ func TestBucketRing_ListIncludesIPs(t *testing.T) {
 		want[dst] = ips
 
 		// Separate buckets give each flow a distinct start time, so time-sorted pages are stable.
-		start := now
 		ring.AddFlow(storage.FlowFromNode{Flow: &types.Flow{
 			Key:          types.NewFlowKey(&types.FlowKeySource{SourceName: "src"}, &types.FlowKeyDestination{DestName: dst}, &types.FlowKeyMeta{}, &proto.PolicyTrace{}),
-			StartTime:    start,
-			EndTime:      start + ipTestInterval,
+			StartTime:    now,
+			EndTime:      now + ipTestInterval,
 			SourceLabels: unique.Make(""),
 			DestLabels:   unique.Make(""),
 			SourceIps:    ips,

@@ -124,12 +124,7 @@ func TestBucketRing_LateFlowAddsStatsNotIPs(t *testing.T) {
 	start := int64(1_000_000)
 	now := start
 	ring := storage.NewBucketRing(242, ipTestInterval, now, storage.WithNowFunc(func() time.Time { return time.Unix(now, 0) }))
-	key := types.NewFlowKey(
-		&types.FlowKeySource{SourceName: "src"},
-		&types.FlowKeyDestination{DestName: "dst"},
-		&types.FlowKeyMeta{},
-		&proto.PolicyTrace{},
-	)
+	key := types.NewFlowKey(&types.FlowKeySource{SourceName: "src"}, &types.FlowKeyDestination{DestName: "dst"}, &types.FlowKeyMeta{}, &proto.PolicyTrace{})
 	send := func(ip string) {
 		ring.AddFlow(storage.FlowFromNode{Flow: &types.Flow{
 			Key:          key,

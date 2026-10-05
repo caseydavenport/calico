@@ -30,8 +30,8 @@ type ipSet struct {
 	// these windows are pending: they don't count toward the cap or affect eviction.
 	open []openWindow
 
-	// kept counts the IPs seen in at least one closed window, which is what the cap applies to.
-	kept int
+	// numKept counts the IPs seen in at least one closed window, which is what the cap applies to.
+	numKept int
 }
 
 // ipEntry records the windows an IP was seen in, open or closed. lastSeen is the newest closed one,
@@ -59,7 +59,7 @@ func (s *ipSet) len() int {
 
 // stage records ips as seen in the open window starting at start.
 func (s *ipSet) stage(ips []string, slot int, start int64) {
-	w := s.openWindow(slot, start)
+	window := s.openWindow(slot, start)
 	if s.ips == nil {
 		s.ips = map[string]*ipEntry{}
 	}
@@ -74,15 +74,15 @@ func (s *ipSet) stage(ips []string, slot int, start int64) {
 		}
 		if !e.windows.has(slot) {
 			e.windows.set(slot)
-			w.count++
-			w.pending = append(w.pending, e)
+			window.count++
+			window.pending = append(window.pending, e)
 		}
 	}
 
 	// Trimming at twice the cap keeps the work amortized. Only the top MaxIPsPerFlow by hash can
 	// survive the close, so dropping the rest early doesn't change the outcome.
-	if w.count > 2*MaxIPsPerFlow {
-		s.trimOpen(w)
+	if window.count > 2*MaxIPsPerFlow {
+		s.trimOpen(window)
 	}
 }
 
@@ -135,18 +135,18 @@ func (s *ipSet) close(w *openWindow) {
 			continue
 		}
 		if e.lastSeen == notKept {
-			s.kept++
+			s.numKept++
 		}
 		e.lastSeen = w.start
 	}
-	excess := s.kept - MaxIPsPerFlow
+	excess := s.numKept - MaxIPsPerFlow
 	if excess <= 0 {
 		return
 	}
 
 	// Only IPs last seen in the oldest windows can go, so sort the kept IPs by lastSeen alone and
 	// rank by hash just the ones tied at the cutoff.
-	kept := make([]rankedIP, 0, s.kept)
+	kept := make([]rankedIP, 0, s.numKept)
 	for ip, e := range s.ips {
 		if e.lastSeen != notKept {
 			kept = append(kept, rankedIP{lastSeen: e.lastSeen, ip: ip})
@@ -160,6 +160,8 @@ func (s *ipSet) close(w *openWindow) {
 	for i := range tied {
 		tied[i].hash = ipHash(tied[i].ip)
 	}
+
+	// Evict every IP older than the cutoff, plus the lowest-ranked tied IPs.
 	evict := append(kept[:lo:lo], newest(tied)[hi-excess:]...)
 	open := s.openMask()
 	for _, r := range evict {
@@ -169,7 +171,7 @@ func (s *ipSet) close(w *openWindow) {
 
 // evict drops an IP's closed windows, keeping it only if it's pending in an open window.
 func (s *ipSet) evict(ip string, e *ipEntry, open *windowSet) {
-	s.kept--
+	s.numKept--
 	e.lastSeen = notKept
 	e.windows = e.windows.and(open)
 	if e.windows.empty() {
@@ -192,7 +194,7 @@ func (s *ipSet) expire(mask *windowSet) {
 		e.windows.clearAll(mask)
 		if e.lastSeen != notKept && e.windows.andNot(&open) == (windowSet{}) {
 			e.lastSeen = notKept
-			s.kept--
+			s.numKept--
 		}
 		if e.windows.empty() {
 			delete(s.ips, ip)

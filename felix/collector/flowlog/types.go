@@ -607,13 +607,13 @@ func (f *FlowStatsByProcess) collectIPs() (srcIPs, dstIPs []string) {
 // ipKeeper collects up to MaxIPsPerFlowLog distinct IPs. Past the cap it keeps the IPs with the
 // highest (hash, address) rather than the first found, so the subset doesn't depend on map order.
 type ipKeeper struct {
-	ips []hashedIP
+	ips  []hashedIP
+	seen map[[16]byte]struct{}
 
 	// floor is the lowest-ranked IP that survived the last trim; nothing ranked at or below it can
 	// make the final cut.
 	floor   hashedIP
 	trimmed bool
-	seen    map[[16]byte]struct{}
 }
 
 type hashedIP struct {
