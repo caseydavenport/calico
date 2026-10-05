@@ -37,7 +37,7 @@ func TestBucketRing_IPsMatchAcrossReplicas(t *testing.T) {
 	for trial := range 25 {
 		t.Run(fmt.Sprintf("trial-%d", trial), func(t *testing.T) {
 			start := int64(1_000_000)
-			pool := 80 + rng.IntN(300)
+			numDistinctIPs := 80 + rng.IntN(300)
 
 			type delivery struct {
 				at   int
@@ -49,12 +49,17 @@ func TestBucketRing_IPsMatchAcrossReplicas(t *testing.T) {
 					for range 1 + rng.IntN(5) {
 						ips := make([]string, rng.IntN(60))
 						for i := range ips {
-							n := rng.IntN(pool)
+							n := rng.IntN(numDistinctIPs)
 							ips[i] = fmt.Sprintf("10.%d.%d.1", n/256, n%256)
 						}
 						ws := start + int64(w*ipTestInterval)
 						f := &types.Flow{
-							Key:          types.NewFlowKey(&types.FlowKeySource{SourceName: "src"}, &types.FlowKeyDestination{DestName: fmt.Sprintf("dst-%d", k)}, &types.FlowKeyMeta{}, &proto.PolicyTrace{}),
+							Key: types.NewFlowKey(
+								&types.FlowKeySource{SourceName: "src"},
+								&types.FlowKeyDestination{DestName: fmt.Sprintf("dst-%d", k)},
+								&types.FlowKeyMeta{},
+								&proto.PolicyTrace{},
+							),
 							StartTime:    ws,
 							EndTime:      ws + ipTestInterval,
 							SourceLabels: unique.Make(""),

@@ -15,4 +15,6 @@
 package storage
 
 // CloseIPWindows lets external tests close IP windows, which BucketRing otherwise does on rollover.
-func CloseIPWindows(d *DiachronicFlow, start int64) { d.closeIPWindows(start) }
+func CloseIPWindows(d *DiachronicFlow, start int64) {
+	d.closeIPWindows(start)
+}

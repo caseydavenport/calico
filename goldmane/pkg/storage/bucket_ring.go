@@ -32,8 +32,8 @@ var ErrStopBucketIteration = errors.New("stop bucket iteration")
 
 type lookupFn func(key types.FlowKey) *DiachronicFlow
 
-// ipWindowCloseLag is how many intervals a window's IPs stay open for flows that arrive late. Replicas
-// each get their own stream of flows, so they agree on the kept IPs only for flows no later than this.
+// ipWindowCloseLag is how many intervals a window's IPs stay open for late flows. Replicas each get
+// their own flow stream, so they agree on the kept IPs only for flows no later than this.
 const ipWindowCloseLag = 1
 
 type BucketRing struct {

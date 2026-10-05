@@ -369,7 +369,7 @@ func TestDiachronicFlow_IPSetEvictionKeepsRefreshedHistory(t *testing.T) {
 func TestDiachronicFlow_IPSetOverflowIgnoresArrivalOrder(t *testing.T) {
 	defer setupTest(t)()
 
-	k := ipTestFlowKey()
+	key := ipTestFlowKey()
 	history := distinctIPs(0, storage.MaxIPsPerFlow/2)
 	burst := distinctIPs(1000, 3*storage.MaxIPsPerFlow)
 	reversed := slices.Clone(burst)
@@ -381,11 +381,11 @@ func TestDiachronicFlow_IPSetOverflowIgnoresArrivalOrder(t *testing.T) {
 		{reversed[:50], reversed[50:]},
 		{burst[:1], burst[1:200], burst[200:]},
 	} {
-		df := storage.NewDiachronicFlow(k, 0)
-		addIPs(df, k, 0, history...)
+		df := storage.NewDiachronicFlow(key, 0)
+		addIPs(df, key, 0, history...)
 		for _, c := range chunks {
 			df.AddFlow(&types.Flow{
-				Key:          k,
+				Key:          key,
 				SourceLabels: unique.Make(""),
 				DestLabels:   unique.Make(""),
 				SourceIps:    c,
