@@ -15,9 +15,11 @@
 package flowlog
 
 import (
+	"cmp"
 	"fmt"
 	"net"
 	"reflect"
+	"slices"
 	"sort"
 	"time"
 
@@ -582,7 +584,7 @@ func (f *FlowStatsByProcess) toFlowProcessReportedStats() []FlowProcessReportedS
 // collectIPs returns the distinct source and destination IP addresses observed
 // across all connections tracked for this flow. The connection tuples retain their real IPs even
 // when the FlowMeta tuple has been zeroed for aggregation, so we read them from flowsRefs here.
-// Each set is deduplicated, sorted, and capped (see MaxIPsPerFlowLog).
+// Each set is deduplicated, sorted, and capped (see keepIPs).
 func (f *FlowStatsByProcess) collectIPs() (srcIPs, dstIPs []string) {
 	stats, ok := f.statsByProcessName[FieldNotIncluded]
 	if !ok {
@@ -592,28 +594,50 @@ func (f *FlowStatsByProcess) collectIPs() (srcIPs, dstIPs []string) {
 	srcSeen := make(map[[16]byte]struct{})
 	dstSeen := make(map[[16]byte]struct{})
 	for t := range stats.flowsRefs {
-		srcFull := len(srcSeen) >= MaxIPsPerFlowLog
-		dstFull := len(dstSeen) >= MaxIPsPerFlowLog
-		if srcFull && dstFull {
-			// Both sets are at capacity; nothing more to collect.
-			break
+		if t.Src != EmptyIP {
+			srcSeen[t.Src] = struct{}{}
 		}
-		if !srcFull && t.Src != EmptyIP {
-			if _, seen := srcSeen[t.Src]; !seen {
-				srcSeen[t.Src] = struct{}{}
-				srcIPs = append(srcIPs, net.IP(t.Src[:]).String())
-			}
-		}
-		if !dstFull && t.Dst != EmptyIP {
-			if _, seen := dstSeen[t.Dst]; !seen {
-				dstSeen[t.Dst] = struct{}{}
-				dstIPs = append(dstIPs, net.IP(t.Dst[:]).String())
-			}
+		if t.Dst != EmptyIP {
+			dstSeen[t.Dst] = struct{}{}
 		}
 	}
-	sort.Strings(srcIPs)
-	sort.Strings(dstIPs)
-	return srcIPs, dstIPs
+	return keepIPs(srcSeen), keepIPs(dstSeen)
+}
+
+// keepIPs renders up to MaxIPsPerFlowLog of ips, sorted. Past the cap it keeps the IPs with the
+// highest hash rather than the first found, so the subset doesn't depend on map iteration order.
+func keepIPs(ips map[[16]byte]struct{}) []string {
+	if len(ips) == 0 {
+		return nil
+	}
+	type hashed struct {
+		ip   [16]byte
+		hash uint64
+	}
+	all := make([]hashed, 0, len(ips))
+	for ip := range ips {
+		all = append(all, hashed{ip: ip, hash: ipHash(ip)})
+	}
+	if len(all) > MaxIPsPerFlowLog {
+		slices.SortFunc(all, func(a, b hashed) int { return cmp.Compare(b.hash, a.hash) })
+		all = all[:MaxIPsPerFlowLog]
+	}
+	out := make([]string, len(all))
+	for i, h := range all {
+		out[i] = net.IP(h.ip[:]).String()
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ipHash is 64-bit FNV-1a over the address bytes.
+func ipHash(ip [16]byte) uint64 {
+	h := uint64(14695981039346656037)
+	for _, c := range ip {
+		h ^= uint64(c)
+		h *= 1099511628211
+	}
+	return h
 }
 
 // FlowProcessReportedStats contains FlowReportedStats along with process information.

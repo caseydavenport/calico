@@ -15,6 +15,7 @@
 package flowlog
 
 import (
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -873,6 +874,33 @@ var _ = Describe("Flow log aggregator tests", func() {
 			// The distinct IPv6 addresses are preserved and rendered in canonical form.
 			Expect(flowLog.SourceIPs).Should(Equal([]string{"2001:db8::1", "2001:db8::3"}))
 			Expect(flowLog.DestIPs).Should(Equal([]string{"2001:db8:1::1"}))
+		})
+
+		It("keeps the same capped subset of IPs whatever order connections arrive in", func() {
+			updates := make([]metric.Update, 3*MaxIPsPerFlowLog)
+			for i := range updates {
+				mu := muNoConn1Rule1AllowUpdateWithEndpointMeta
+				mu.Tuple.Src = utils.IpStrTo16Byte(fmt.Sprintf("10.1.%d.%d", i/256, i%256))
+				mu.Tuple.L4Src = 40000 + i
+				updates[i] = mu
+			}
+
+			var got [][]string
+			for _, reverse := range []bool{false, true} {
+				ca := NewAggregator().IncludeIPs(true)
+				for i := range updates {
+					u := updates[i]
+					if reverse {
+						u = updates[len(updates)-1-i]
+					}
+					Expect(ca.FeedUpdate(&u)).NotTo(HaveOccurred())
+				}
+				messages := ca.GetAndCalibrate()
+				Expect(messages).To(HaveLen(1))
+				Expect(messages[0].SourceIPs).To(HaveLen(MaxIPsPerFlowLog))
+				got = append(got, messages[0].SourceIPs)
+			}
+			Expect(got[1]).To(Equal(got[0]))
 		})
 
 		It("omits source and destination IPs when IP collection is disabled", func() {
