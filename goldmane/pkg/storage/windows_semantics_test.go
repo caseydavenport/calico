@@ -80,6 +80,27 @@ func TestBackingArrayPointerShiftsOnInsert(t *testing.T) {
 	}
 }
 
+// GetWindows heap-allocates its loop variable on every iteration, so its cost grows with the
+// flow's history even though only one window matches the bucket.
+func TestGetWindowsAllocsScaleWithHistory(t *testing.T) {
+	for _, n := range []int{1, 20, 242} {
+		d := buildDiachronicFlow(n)
+		s, e := int64((n-1)*15), int64(n*15)
+		if got := len(d.GetWindows(s, e)); got != 1 {
+			t.Fatalf("n=%d: expected 1 matching window, got %d", n, got)
+		}
+		getWindows := testing.AllocsPerRun(100, func() { _ = d.GetWindows(s, e) })
+		snapshot := testing.AllocsPerRun(100, func() { _ = snapshotValue(d, s, e) })
+		t.Logf("history=%d windows: GetWindows %.0f allocs, value snapshot %.0f allocs", n, getWindows, snapshot)
+		if getWindows < float64(n) {
+			t.Errorf("n=%d: expected at least %d allocs from GetWindows, got %.0f", n, n, getWindows)
+		}
+		if snapshot != 0 {
+			t.Errorf("n=%d: expected value snapshot not to allocate, got %.0f", n, snapshot)
+		}
+	}
+}
+
 func TestReportSizes(t *testing.T) {
 	t.Logf("DiachronicFlow=%d Window=%d windowLock=%d DeferredFlowBuilder=%d valueBuilder=%d",
 		unsafe.Sizeof(DiachronicFlow{}), unsafe.Sizeof(Window{}), unsafe.Sizeof(windowLock{}),

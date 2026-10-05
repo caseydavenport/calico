@@ -24,9 +24,17 @@ const (
 )
 
 // benchBucket is the bucket the benchmarks stream: the newest window on every flow.
-var benchBucketStart, benchBucketEnd = int64((benchWindowsPerFlow - 1) * benchInterval), int64(benchWindowsPerFlow * benchInterval)
+var benchBucketStart, benchBucketEnd = bucketFor(benchWindowsPerFlow)
+
+func bucketFor(windows int) (int64, int64) {
+	return int64((windows - 1) * benchInterval), int64(windows * benchInterval)
+}
 
 func benchFlows(n int) ([]*DiachronicFlow, *types.Flow) {
+	return benchFlowsWithHistory(n, benchWindowsPerFlow)
+}
+
+func benchFlowsWithHistory(n, windows int) ([]*DiachronicFlow, *types.Flow) {
 	logrus.SetLevel(logrus.WarnLevel)
 	src := unique.Make("app=frontend,env=prod,team=payments,tier=web,version=v1")
 	dst := unique.Make("app=backend,env=prod,team=payments,tier=api,version=v2")
@@ -41,7 +49,7 @@ func benchFlows(n int) ([]*DiachronicFlow, *types.Flow) {
 		)
 		f = &types.Flow{Key: k, PacketsIn: 10, PacketsOut: 20, BytesIn: 1000, BytesOut: 2000, NumConnectionsStarted: 1, SourceLabels: src, DestLabels: dst}
 		ds[i] = NewDiachronicFlow(k, int64(i))
-		for w := range benchWindowsPerFlow {
+		for w := range windows {
 			ds[i].AddFlow(f, int64(w*benchInterval), int64((w+1)*benchInterval))
 		}
 	}
@@ -196,9 +204,40 @@ func BenchmarkAddFlowContended(b *testing.B) {
 	}
 }
 
+// BenchmarkAddFlowContendedValue is BenchmarkAddFlowContended with readers that take a
+// non-allocating value snapshot, so reader GC churn does not mask the lock cost.
+func BenchmarkAddFlowContendedValue(b *testing.B) {
+	for _, readers := range []int{1, 4, 11} {
+		b.Run(fmt.Sprintf("readers=%d", readers), func(b *testing.B) {
+			ds, f := benchFlows(10_000)
+			var stop atomic.Bool
+			var reads atomic.Int64
+			var wg sync.WaitGroup
+			for r := range readers {
+				wg.Go(func() {
+					var n int64
+					for i := r * 997; !stop.Load(); i++ {
+						_ = snapshotValue(ds[i%len(ds)], benchBucketStart, benchBucketEnd)
+						n++
+					}
+					reads.Add(n)
+				})
+			}
+			i := 0
+			for b.Loop() {
+				ds[i%len(ds)].AddFlow(f, benchBucketStart, benchBucketEnd)
+				i++
+			}
+			stop.Store(true)
+			wg.Wait()
+			b.ReportMetric(float64(reads.Load())/b.Elapsed().Seconds()/1e6, "Mreads/s")
+		})
+	}
+}
+
 type streamStrategy struct {
 	name string
-	run  func(ds []*DiachronicFlow, streams int)
+	run  func(ds []*DiachronicFlow, s, e int64, streams int)
 }
 
 func consume(fb FlowBuilder, res *proto.FlowResult) {
@@ -206,35 +245,35 @@ func consume(fb FlowBuilder, res *proto.FlowResult) {
 }
 
 var streamStrategies = []streamStrategy{
-	{"pr", func(ds []*DiachronicFlow, streams int) {
+	{"pr", func(ds []*DiachronicFlow, s, e int64, streams int) {
 		fanOut(streams, func() {
 			res := &proto.FlowResult{Flow: &proto.Flow{}}
 			for _, d := range ds {
-				consume(NewDeferredFlowBuilder(d, benchBucketStart, benchBucketEnd), res)
+				consume(NewDeferredFlowBuilder(d, s, e), res)
 			}
 		})
 	}},
-	{"ptr-trimmed", func(ds []*DiachronicFlow, streams int) {
+	{"ptr-trimmed", func(ds []*DiachronicFlow, s, e int64, streams int) {
 		fanOut(streams, func() {
 			res := &proto.FlowResult{Flow: &proto.Flow{}}
 			for _, d := range ds {
-				consume(&ptrTrimmedBuilder{d: d, w: d.GetWindows(benchBucketStart, benchBucketEnd)}, res)
+				consume(&ptrTrimmedBuilder{d: d, w: d.GetWindows(s, e)}, res)
 			}
 		})
 	}},
-	{"value-per-stream", func(ds []*DiachronicFlow, streams int) {
+	{"value-per-stream", func(ds []*DiachronicFlow, s, e int64, streams int) {
 		fanOut(streams, func() {
 			res := &proto.FlowResult{Flow: &proto.Flow{}}
 			for _, d := range ds {
-				vb := snapshotValue(d, benchBucketStart, benchBucketEnd)
+				vb := snapshotValue(d, s, e)
 				consume(&vb, res)
 			}
 		})
 	}},
-	{"value-shared", func(ds []*DiachronicFlow, streams int) {
+	{"value-shared", func(ds []*DiachronicFlow, s, e int64, streams int) {
 		snap := make([]valueBuilder, len(ds))
 		for i, d := range ds {
-			snap[i] = snapshotValue(d, benchBucketStart, benchBucketEnd)
+			snap[i] = snapshotValue(d, s, e)
 		}
 		fanOut(streams, func() {
 			res := &proto.FlowResult{Flow: &proto.Flow{}}
@@ -267,12 +306,32 @@ func BenchmarkStreamBucket(b *testing.B) {
 					b.ReportAllocs()
 					m := startGCMeter()
 					for b.Loop() {
-						s.run(ds, streams)
+						s.run(ds, benchBucketStart, benchBucketEnd, streams)
 					}
 					m.report(b)
 					b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n*streams), "ns/flow")
 				})
 			}
+		}
+	}
+}
+
+// BenchmarkStreamBucketLongHistory streams flows that have been active for the whole ring.
+func BenchmarkStreamBucketLongHistory(b *testing.B) {
+	const n, windows = 10_000, 242
+	ds, _ := benchFlowsWithHistory(n, windows)
+	start, end := bucketFor(windows)
+	for _, streams := range []int{1, 10} {
+		for _, s := range streamStrategies {
+			b.Run(fmt.Sprintf("flows=%d/history=%d/streams=%d/%s", n, windows, streams, s.name), func(b *testing.B) {
+				b.ReportAllocs()
+				m := startGCMeter()
+				for b.Loop() {
+					s.run(ds, start, end, streams)
+				}
+				m.report(b)
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n*streams), "ns/flow")
+			})
 		}
 	}
 }
