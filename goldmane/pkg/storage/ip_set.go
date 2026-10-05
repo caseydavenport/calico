@@ -17,112 +17,185 @@ package storage
 import (
 	"cmp"
 	"maps"
+	"math"
 	"slices"
 )
 
-// ipSet holds the IPs seen in one direction of a DiachronicFlow. A window's IPs are staged until it
+// ipSet holds the IPs seen in one direction of a DiachronicFlow. A window's IPs stay pending until it
 // closes, and every trim ranks IPs by their windows and hash, so arrival order never matters.
 type ipSet struct {
-	kept map[string]*ipEntry
+	ips map[string]*ipEntry
 
-	// open holds the staging sets of windows that haven't closed yet; there are only ever a few.
-	open []stagedWindow
+	// open lists the windows that haven't closed yet; there are only ever a few. An IP's bits for
+	// these windows are pending: they don't count toward the cap or affect eviction.
+	open []openWindow
+
+	// kept counts the IPs seen in at least one closed window, which is what the cap applies to.
+	kept int
 }
 
-// ipEntry records the windows an IP was seen in, plus the newest such window (lastSeen), which
-// decides what gets evicted once the per-key cap is reached.
+// ipEntry records the windows an IP was seen in, open or closed. lastSeen is the newest closed one,
+// or notKept if there is none, and decides what gets evicted once the cap is reached.
 type ipEntry struct {
 	windows  windowSet
 	lastSeen int64
 }
 
-type stagedWindow struct {
+const notKept = math.MinInt64
+
+type openWindow struct {
 	start int64
 	slot  int
-	ips   map[string]struct{}
+
+	// count is the number of IPs with this window's bit set, and pending holds their entries, so
+	// closing the window touches only them. Entries trimmed since have the bit cleared.
+	count   int
+	pending []*ipEntry
 }
 
 func (s *ipSet) len() int {
-	n := len(s.kept)
-	for _, w := range s.open {
-		n += len(w.ips)
-	}
-	return n
+	return len(s.ips)
 }
 
 // stage records ips as seen in the open window starting at start.
 func (s *ipSet) stage(ips []string, slot int, start int64) {
 	w := s.openWindow(slot, start)
+	if s.ips == nil {
+		s.ips = map[string]*ipEntry{}
+	}
 	for _, ip := range ips {
-		if ip != "" {
-			w.ips[ip] = struct{}{}
+		if ip == "" {
+			continue
+		}
+		e := s.ips[ip]
+		if e == nil {
+			e = &ipEntry{lastSeen: notKept}
+			s.ips[ip] = e
+		}
+		if !e.windows.has(slot) {
+			e.windows.set(slot)
+			w.count++
+			w.pending = append(w.pending, e)
 		}
 	}
 
 	// Trimming at twice the cap keeps the work amortized. Only the top MaxIPsPerFlow by hash can
 	// survive the close, so dropping the rest early doesn't change the outcome.
-	if len(w.ips) > 2*MaxIPsPerFlow {
-		trimStaged(w.ips)
+	if w.count > 2*MaxIPsPerFlow {
+		s.trimOpen(w)
 	}
 }
 
-func (s *ipSet) openWindow(slot int, start int64) *stagedWindow {
+func (s *ipSet) openWindow(slot int, start int64) *openWindow {
 	for i := range s.open {
 		if s.open[i].start == start {
 			return &s.open[i]
 		}
 	}
-	s.open = append(s.open, stagedWindow{start: start, slot: slot, ips: map[string]struct{}{}})
+	s.open = append(s.open, openWindow{start: start, slot: slot})
 	return &s.open[len(s.open)-1]
 }
 
-// closeThrough merges every open window starting at or before start into kept, oldest first, and
-// trims kept to the newest MaxIPsPerFlow IPs.
-func (s *ipSet) closeThrough(start int64) {
-	slices.SortFunc(s.open, func(a, b stagedWindow) int { return cmp.Compare(a.start, b.start) })
-	n := 0
-	for _, w := range s.open {
-		if w.start > start {
-			break
-		}
-		s.merge(w)
-		n++
-	}
-	s.open = slices.Delete(s.open, 0, n)
-}
-
-func (s *ipSet) merge(w stagedWindow) {
-	trimStaged(w.ips)
-	if s.kept == nil && len(w.ips) > 0 {
-		s.kept = make(map[string]*ipEntry, len(w.ips))
-	}
-	for ip := range w.ips {
-		e, ok := s.kept[ip]
-		if !ok {
-			e = &ipEntry{}
-			s.kept[ip] = e
-		}
-		e.windows.set(w.slot)
-		e.lastSeen = max(e.lastSeen, w.start)
-	}
-	if len(s.kept) <= MaxIPsPerFlow {
+// trimOpen keeps the MaxIPsPerFlow IPs with the highest rank in an open window.
+func (s *ipSet) trimOpen(w *openWindow) {
+	if w.count <= MaxIPsPerFlow {
 		return
 	}
-	ips := slices.Collect(maps.Keys(s.kept))
-	slices.SortFunc(ips, func(a, b string) int {
-		return cmp.Or(cmp.Compare(s.kept[a].lastSeen, s.kept[b].lastSeen), cmp.Compare(ipHash(a), ipHash(b)))
-	})
-	for _, ip := range ips[:len(ips)-MaxIPsPerFlow] {
-		delete(s.kept, ip)
+	ranked := make([]rankedIP, 0, w.count)
+	for ip, e := range s.ips {
+		if e.windows.has(w.slot) {
+			ranked = append(ranked, newRankedIP(ip, 0))
+		}
+	}
+	for _, r := range newest(ranked)[MaxIPsPerFlow:] {
+		e := s.ips[r.ip]
+		e.windows.clear(w.slot)
+		if e.windows.empty() {
+			delete(s.ips, r.ip)
+		}
+	}
+	w.count = MaxIPsPerFlow
+}
+
+// closeThrough closes every open window starting at or before start, oldest first, and trims the
+// kept IPs to the newest MaxIPsPerFlow.
+func (s *ipSet) closeThrough(start int64) {
+	slices.SortFunc(s.open, func(a, b openWindow) int { return cmp.Compare(a.start, b.start) })
+	for len(s.open) > 0 && s.open[0].start <= start {
+		w := s.open[0]
+		s.open = s.open[1:]
+		s.close(&w)
 	}
 }
 
-// expire clears the slots in mask from every kept IP and drops IPs left with no windows.
+func (s *ipSet) close(w *openWindow) {
+	s.trimOpen(w)
+	for _, e := range w.pending {
+		if !e.windows.has(w.slot) || e.lastSeen == w.start {
+			continue
+		}
+		if e.lastSeen == notKept {
+			s.kept++
+		}
+		e.lastSeen = w.start
+	}
+	excess := s.kept - MaxIPsPerFlow
+	if excess <= 0 {
+		return
+	}
+
+	// Only IPs last seen in the oldest windows can go, so sort the kept IPs by lastSeen alone and
+	// rank by hash just the ones tied at the cutoff.
+	kept := make([]rankedIP, 0, s.kept)
+	for ip, e := range s.ips {
+		if e.lastSeen != notKept {
+			kept = append(kept, rankedIP{lastSeen: e.lastSeen, ip: ip})
+		}
+	}
+	slices.SortFunc(kept, func(a, b rankedIP) int { return cmp.Compare(a.lastSeen, b.lastSeen) })
+	cutoff := kept[excess-1].lastSeen
+	lo, _ := slices.BinarySearchFunc(kept, cutoff, func(r rankedIP, t int64) int { return cmp.Compare(r.lastSeen, t) })
+	hi, _ := slices.BinarySearchFunc(kept, cutoff+1, func(r rankedIP, t int64) int { return cmp.Compare(r.lastSeen, t) })
+	tied := kept[lo:hi]
+	for i := range tied {
+		tied[i].hash = ipHash(tied[i].ip)
+	}
+	evict := append(kept[:lo:lo], newest(tied)[hi-excess:]...)
+	open := s.openMask()
+	for _, r := range evict {
+		s.evict(r.ip, s.ips[r.ip], &open)
+	}
+}
+
+// evict drops an IP's closed windows, keeping it only if it's pending in an open window.
+func (s *ipSet) evict(ip string, e *ipEntry, open *windowSet) {
+	s.kept--
+	e.lastSeen = notKept
+	e.windows = e.windows.and(open)
+	if e.windows.empty() {
+		delete(s.ips, ip)
+	}
+}
+
+func (s *ipSet) openMask() windowSet {
+	var m windowSet
+	for _, w := range s.open {
+		m.set(w.slot)
+	}
+	return m
+}
+
+// expire clears the slots in mask from every IP and drops IPs left with no windows.
 func (s *ipSet) expire(mask *windowSet) {
-	for ip, e := range s.kept {
+	open := s.openMask()
+	for ip, e := range s.ips {
 		e.windows.clearAll(mask)
+		if e.lastSeen != notKept && e.windows.andNot(&open) == (windowSet{}) {
+			e.lastSeen = notKept
+			s.kept--
+		}
 		if e.windows.empty() {
-			delete(s.kept, ip)
+			delete(s.ips, ip)
 		}
 	}
 }
@@ -130,43 +203,57 @@ func (s *ipSet) expire(mask *windowSet) {
 // matching returns the sorted IPs seen in any of the slots in mask, including windows that are still
 // open. Open windows can push the count past the cap, so it keeps the newest MaxIPsPerFlow.
 func (s *ipSet) matching(mask *windowSet) []string {
+	open := s.openMask()
+	closed := mask.andNot(&open)
 	lastSeen := map[string]int64{}
-	for ip, e := range s.kept {
-		if e.windows.intersects(mask) {
-			lastSeen[ip] = e.lastSeen
-		}
-	}
-	for _, w := range s.open {
-		var ws windowSet
-		ws.set(w.slot)
-		if !ws.intersects(mask) {
+	for ip, e := range s.ips {
+		if !e.windows.intersects(mask) {
 			continue
 		}
-		for ip := range w.ips {
-			lastSeen[ip] = max(lastSeen[ip], w.start)
+		seen := int64(notKept)
+		if e.windows.intersects(&closed) {
+			seen = e.lastSeen
 		}
+		for _, w := range s.open {
+			if mask.has(w.slot) && e.windows.has(w.slot) {
+				seen = max(seen, w.start)
+			}
+		}
+		lastSeen[ip] = seen
 	}
-	ips := slices.Collect(maps.Keys(lastSeen))
-	if len(ips) > MaxIPsPerFlow {
-		slices.SortFunc(ips, func(a, b string) int {
-			return cmp.Or(cmp.Compare(lastSeen[b], lastSeen[a]), cmp.Compare(ipHash(b), ipHash(a)))
-		})
-		ips = ips[:MaxIPsPerFlow]
+	if len(lastSeen) <= MaxIPsPerFlow {
+		return slices.Sorted(maps.Keys(lastSeen))
+	}
+	ranked := make([]rankedIP, 0, len(lastSeen))
+	for ip, seen := range lastSeen {
+		ranked = append(ranked, newRankedIP(ip, seen))
+	}
+	ips := make([]string, MaxIPsPerFlow)
+	for i, r := range newest(ranked)[:MaxIPsPerFlow] {
+		ips[i] = r.ip
 	}
 	slices.Sort(ips)
 	return ips
 }
 
-// trimStaged keeps the MaxIPsPerFlow IPs with the highest hash.
-func trimStaged(ips map[string]struct{}) {
-	if len(ips) <= MaxIPsPerFlow {
-		return
-	}
-	all := slices.Collect(maps.Keys(ips))
-	slices.SortFunc(all, func(a, b string) int { return cmp.Compare(ipHash(a), ipHash(b)) })
-	for _, ip := range all[:len(all)-MaxIPsPerFlow] {
-		delete(ips, ip)
-	}
+// rankedIP orders IPs for eviction by lastSeen, then hash, then address. The address only breaks
+// hash collisions, so the order never depends on how the IPs arrived.
+type rankedIP struct {
+	lastSeen int64
+	hash     uint64
+	ip       string
+}
+
+func newRankedIP(ip string, lastSeen int64) rankedIP {
+	return rankedIP{lastSeen: lastSeen, hash: ipHash(ip), ip: ip}
+}
+
+// newest sorts ranked from highest to lowest rank, so the IPs to keep come first.
+func newest(ranked []rankedIP) []rankedIP {
+	slices.SortFunc(ranked, func(a, b rankedIP) int {
+		return cmp.Or(cmp.Compare(b.lastSeen, a.lastSeen), cmp.Compare(b.hash, a.hash), cmp.Compare(b.ip, a.ip))
+	})
+	return ranked
 }
 
 // FNV-1a parameters. Hashing inline avoids hash/fnv's per-call allocation.

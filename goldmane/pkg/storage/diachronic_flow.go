@@ -65,14 +65,24 @@ const windowSlots = 256
 // windowSet is a windowSlots-bit set recording which window slots an IP was observed in.
 type windowSet [windowSlots / 64]uint64
 
-func (s *windowSet) set(slot int) { s[slot/64] |= 1 << (uint(slot) % 64) }
-func (s *windowSet) empty() bool  { return s[0]|s[1]|s[2]|s[3] == 0 }
+func (s *windowSet) set(slot int)      { s[slot/64] |= 1 << (uint(slot) % 64) }
+func (s *windowSet) clear(slot int)    { s[slot/64] &^= 1 << (uint(slot) % 64) }
+func (s *windowSet) has(slot int) bool { return s[slot/64]&(1<<(uint(slot)%64)) != 0 }
+func (s *windowSet) empty() bool       { return s[0]|s[1]|s[2]|s[3] == 0 }
 
 // clearAll clears every slot that is set in mask.
 func (s *windowSet) clearAll(mask *windowSet) {
 	for i := range s {
 		s[i] &^= mask[i]
 	}
+}
+
+func (s *windowSet) and(other *windowSet) windowSet {
+	return windowSet{s[0] & other[0], s[1] & other[1], s[2] & other[2], s[3] & other[3]}
+}
+
+func (s *windowSet) andNot(other *windowSet) windowSet {
+	return windowSet{s[0] &^ other[0], s[1] &^ other[1], s[2] &^ other[2], s[3] &^ other[3]}
 }
 
 // intersects reports whether this set shares any slot with other.
