@@ -17,7 +17,6 @@ package storage
 import (
 	"sort"
 	"strings"
-	"sync"
 	"unique"
 
 	"github.com/sirupsen/logrus"
@@ -34,7 +33,7 @@ type DiachronicFlow struct {
 	Key types.FlowKey
 
 	// mu guards Windows, which streams read off the aggregator goroutine.
-	mu sync.RWMutex
+	mu windowLock
 
 	// Windows is a slice of time windows that the DiachronicFlow has statistics for. Each element in the slice
 	// represents a time window, and the statistics for that window are stored in the corresponding index
