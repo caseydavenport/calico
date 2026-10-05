@@ -15,6 +15,7 @@
 package flowlog
 
 import (
+	"bytes"
 	"cmp"
 	"fmt"
 	"net"
@@ -584,50 +585,90 @@ func (f *FlowStatsByProcess) toFlowProcessReportedStats() []FlowProcessReportedS
 // collectIPs returns the distinct source and destination IP addresses observed
 // across all connections tracked for this flow. The connection tuples retain their real IPs even
 // when the FlowMeta tuple has been zeroed for aggregation, so we read them from flowsRefs here.
-// Each set is deduplicated, sorted, and capped (see keepIPs).
+// Each set is deduplicated, sorted, and capped (see ipKeeper).
 func (f *FlowStatsByProcess) collectIPs() (srcIPs, dstIPs []string) {
 	stats, ok := f.statsByProcessName[FieldNotIncluded]
 	if !ok {
 		return nil, nil
 	}
 
-	srcSeen := make(map[[16]byte]struct{})
-	dstSeen := make(map[[16]byte]struct{})
+	var src, dst ipKeeper
 	for t := range stats.flowsRefs {
 		if t.Src != EmptyIP {
-			srcSeen[t.Src] = struct{}{}
+			src.add(t.Src)
 		}
 		if t.Dst != EmptyIP {
-			dstSeen[t.Dst] = struct{}{}
+			dst.add(t.Dst)
 		}
 	}
-	return keepIPs(srcSeen), keepIPs(dstSeen)
+	return src.sorted(), dst.sorted()
 }
 
-// keepIPs renders up to MaxIPsPerFlowLog of ips, sorted. Past the cap it keeps the IPs with the
-// highest hash rather than the first found, so the subset doesn't depend on map iteration order.
-func keepIPs(ips map[[16]byte]struct{}) []string {
-	if len(ips) == 0 {
+// ipKeeper collects up to MaxIPsPerFlowLog distinct IPs. Past the cap it keeps the IPs with the
+// highest (hash, address) rather than the first found, so the subset doesn't depend on map order.
+type ipKeeper struct {
+	ips []hashedIP
+
+	// floor is the lowest-ranked IP that survived the last trim; nothing ranked at or below it can
+	// make the final cut.
+	floor   hashedIP
+	trimmed bool
+	seen    map[[16]byte]struct{}
+}
+
+type hashedIP struct {
+	hash uint64
+	ip   [16]byte
+}
+
+func (k *ipKeeper) add(ip [16]byte) {
+	h := hashedIP{hash: ipHash(ip), ip: ip}
+	if k.trimmed && compareHashedIPs(h, k.floor) <= 0 {
+		return
+	}
+	if k.seen == nil {
+		k.seen = make(map[[16]byte]struct{})
+	}
+	if _, ok := k.seen[ip]; ok {
+		return
+	}
+	k.seen[ip] = struct{}{}
+	k.ips = append(k.ips, h)
+
+	// Trimming at twice the cap bounds memory and keeps the work amortized.
+	if len(k.ips) > 2*MaxIPsPerFlowLog {
+		k.trim()
+	}
+}
+
+func (k *ipKeeper) trim() {
+	slices.SortFunc(k.ips, func(a, b hashedIP) int { return compareHashedIPs(b, a) })
+	for _, h := range k.ips[MaxIPsPerFlowLog:] {
+		delete(k.seen, h.ip)
+	}
+	k.ips = k.ips[:MaxIPsPerFlowLog]
+	k.floor = k.ips[MaxIPsPerFlowLog-1]
+	k.trimmed = true
+}
+
+// sorted renders the kept IPs in address order.
+func (k *ipKeeper) sorted() []string {
+	if len(k.ips) == 0 {
 		return nil
 	}
-	type hashed struct {
-		ip   [16]byte
-		hash uint64
+	if len(k.ips) > MaxIPsPerFlowLog {
+		k.trim()
 	}
-	all := make([]hashed, 0, len(ips))
-	for ip := range ips {
-		all = append(all, hashed{ip: ip, hash: ipHash(ip)})
-	}
-	if len(all) > MaxIPsPerFlowLog {
-		slices.SortFunc(all, func(a, b hashed) int { return cmp.Compare(b.hash, a.hash) })
-		all = all[:MaxIPsPerFlowLog]
-	}
-	out := make([]string, len(all))
-	for i, h := range all {
+	out := make([]string, len(k.ips))
+	for i, h := range k.ips {
 		out[i] = net.IP(h.ip[:]).String()
 	}
 	sort.Strings(out)
 	return out
+}
+
+func compareHashedIPs(a, b hashedIP) int {
+	return cmp.Or(cmp.Compare(a.hash, b.hash), bytes.Compare(a.ip[:], b.ip[:]))
 }
 
 // FNV-1a parameters. Hashing inline avoids hash/fnv's per-call allocation.
