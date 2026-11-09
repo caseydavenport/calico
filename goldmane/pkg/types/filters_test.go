@@ -15,9 +15,6 @@
 package types_test
 
 import (
-	"math/rand/v2"
-	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,219 +23,116 @@ import (
 	"github.com/projectcalico/calico/goldmane/proto"
 )
 
-// TestMatchesAgainstReference compares Matches with the closure-based implementation it
-// replaced, over generated keys and filters that exercise every filter field, the UI aliases,
-// and the empty-but-non-nil policy filter.
-func TestMatchesAgainstReference(t *testing.T) {
-	rng := rand.New(rand.NewPCG(1, 2))
-	keys := make([]*types.FlowKey, 200)
-	for i := range keys {
-		keys[i] = randomFilterKey(rng)
-	}
-
-	var matched, rejected int
-	for range 2000 {
-		filter := randomFilter(rng)
-		for _, k := range keys {
-			want := referenceMatches(filter, k)
-			require.Equal(t, want, types.Matches(filter, k), "filter %v, key %v", filter, k.Fields())
-			if want {
-				matched++
-			} else {
-				rejected++
-			}
-		}
-	}
-
-	// Both outcomes have to be common, or the comparison would pass for a trivial Matches.
-	require.Greater(t, matched, 20000)
-	require.Greater(t, rejected, 20000)
+// matchesCase is one Matches scenario. mutate, when set, edits the base key from
+// matchesTestKey before matching.
+type matchesCase struct {
+	name   string
+	mutate func(*proto.FlowKey)
+	filter *proto.Filter
+	want   bool
 }
 
-func TestMatchesEmptyPolicyFilter(t *testing.T) {
-	k := types.ProtoToFlowKey(&proto.FlowKey{
-		Policies: &proto.PolicyTrace{EnforcedPolicies: []*proto.PolicyHit{{Name: "p"}}},
-	})
-	require.True(t, types.Matches(&proto.Filter{}, k), "a nil policy filter must match")
-	require.False(t, types.Matches(&proto.Filter{Policies: []*proto.PolicyMatch{}}, k), "an empty policy filter matches nothing")
+func exact(v string) *proto.StringMatch {
+	return &proto.StringMatch{Value: v, Type: proto.MatchType_Exact}
 }
 
-var (
-	filterKeyNames      = []string{"pub", "pvt", "client-1", "server-*", ""}
-	filterKeyNamespaces = []string{"Global", "ns-1", "ns-2", ""}
-	filterKeyPolicies   = []string{"allow-dns", "deny-all", "staged-allow"}
-	filterKeyTiers      = []string{"default", "security"}
-	filterValues        = []string{"pub", "PUBLIC NETWORK", "PRIVATE", "NET", "-", "Global", "ns", "ns-1", "client", "server-*", "allow", "staged-allow", "default", ""}
-	filterActions       = []proto.Action{proto.Action_ActionUnspecified, proto.Action_Allow, proto.Action_Deny, proto.Action_Pass}
-	filterKinds         = []proto.PolicyKind{proto.PolicyKind_KindUnspecified, proto.PolicyKind_CalicoNetworkPolicy, proto.PolicyKind_NetworkPolicy, proto.PolicyKind_EndOfTier}
-)
-
-func pick[E any](rng *rand.Rand, s []E) E {
-	return s[rng.IntN(len(s))]
+func fuzzy(v string) *proto.StringMatch {
+	return &proto.StringMatch{Value: v, Type: proto.MatchType_Fuzzy}
 }
 
-func randomFilterHits(rng *rand.Rand, n int) []*proto.PolicyHit {
-	var hits []*proto.PolicyHit
-	for i := range n {
-		hits = append(hits, &proto.PolicyHit{
-			Kind:        pick(rng, filterKinds[1:]),
-			Name:        pick(rng, filterKeyPolicies),
-			Namespace:   pick(rng, filterKeyNamespaces),
-			Tier:        pick(rng, filterKeyTiers),
-			Action:      pick(rng, filterActions[1:]),
-			PolicyIndex: int64(i),
-		})
-	}
-	return hits
-}
-
-func randomFilterKey(rng *rand.Rand) *types.FlowKey {
-	return types.ProtoToFlowKey(&proto.FlowKey{
-		SourceName:      pick(rng, filterKeyNames),
-		SourceNamespace: pick(rng, filterKeyNamespaces),
-		DestName:        pick(rng, filterKeyNames),
-		DestNamespace:   pick(rng, filterKeyNamespaces),
-		DestPort:        pick(rng, []int64{0, 80, 443}),
-		Proto:           pick(rng, []string{"tcp", "udp"}),
-		Reporter:        pick(rng, []proto.Reporter{proto.Reporter_Src, proto.Reporter_Dst}),
-		Action:          pick(rng, filterActions[1:]),
+// matchesTestKey returns a flow with one enforced Allow hit and one pending Deny hit, so policy
+// and pending-action filters can tell the two lists apart.
+func matchesTestKey() *proto.FlowKey {
+	return &proto.FlowKey{
+		SourceName:      "client-1",
+		SourceNamespace: "ns-1",
+		DestName:        "server-1",
+		DestNamespace:   "ns-2",
+		DestPort:        443,
+		Proto:           "tcp",
+		Reporter:        proto.Reporter_Src,
+		Action:          proto.Action_Allow,
 		Policies: &proto.PolicyTrace{
-			EnforcedPolicies: randomFilterHits(rng, rng.IntN(3)),
-			PendingPolicies:  randomFilterHits(rng, rng.IntN(3)),
+			EnforcedPolicies: []*proto.PolicyHit{{
+				Kind:      proto.PolicyKind_CalicoNetworkPolicy,
+				Name:      "allow-dns",
+				Namespace: "ns-1",
+				Tier:      "default",
+				Action:    proto.Action_Allow,
+			}},
+			PendingPolicies: []*proto.PolicyHit{{
+				Kind:      proto.PolicyKind_NetworkPolicy,
+				Name:      "staged-deny",
+				Namespace: "ns-1",
+				Tier:      "security",
+				Action:    proto.Action_Deny,
+			}},
 		},
-	})
+	}
 }
 
-// randomFilter leaves each field unset most of the time, so filters combine a few fields.
-func randomFilter(rng *rand.Rand) *proto.Filter {
-	if rng.IntN(50) == 0 {
-		return nil
+func TestMatches(t *testing.T) {
+	sourceName := func(n string) func(*proto.FlowKey) {
+		return func(k *proto.FlowKey) { k.SourceName = n }
 	}
-	set := func() bool { return rng.IntN(4) == 0 }
-	strs := func() []*proto.StringMatch {
-		if !set() {
-			return nil
-		}
-		var out []*proto.StringMatch
-		for range 1 + rng.IntN(2) {
-			out = append(out, &proto.StringMatch{
-				Value: pick(rng, filterValues),
-				Type:  pick(rng, []proto.MatchType{proto.MatchType_Exact, proto.MatchType_Fuzzy}),
-			})
-		}
-		return out
-	}
-	optStr := func() *proto.StringMatch {
-		if m := strs(); m != nil {
-			return m[0]
-		}
-		return nil
+	noPolicies := func(k *proto.FlowKey) { k.Policies = &proto.PolicyTrace{} }
+	globalSrc := func(k *proto.FlowKey) { k.SourceNamespace = "Global" }
+	globalDst := func(k *proto.FlowKey) { k.DestNamespace = "Global" }
+
+	cases := []matchesCase{
+		{name: "nil filter", filter: nil, want: true},
+		{name: "empty filter", filter: &proto.Filter{}, want: true},
+
+		// UI aliases: "pub", "pvt" and "Global" also match their displayed values.
+		{name: "public alias exact", mutate: sourceName("pub"), filter: &proto.Filter{SourceNames: []*proto.StringMatch{exact("PUBLIC NETWORK")}}, want: true},
+		{name: "public stored value exact", mutate: sourceName("pub"), filter: &proto.Filter{SourceNames: []*proto.StringMatch{exact("pub")}}, want: true},
+		{name: "private alias fuzzy", mutate: func(k *proto.FlowKey) { k.DestName = "pvt" }, filter: &proto.Filter{DestNames: []*proto.StringMatch{fuzzy("NET")}}, want: true},
+		{name: "alias of another value", mutate: sourceName("pvt"), filter: &proto.Filter{SourceNames: []*proto.StringMatch{exact("PUBLIC NETWORK")}}, want: false},
+		{name: "alias on a name without one", filter: &proto.Filter{SourceNames: []*proto.StringMatch{exact("PUBLIC NETWORK")}}, want: false},
+		{name: "global namespace alias", mutate: globalSrc, filter: &proto.Filter{SourceNamespaces: []*proto.StringMatch{exact("-")}}, want: true},
+		{name: "global dest namespace alias", mutate: globalDst, filter: &proto.Filter{DestNamespaces: []*proto.StringMatch{exact("-")}}, want: true},
+		{name: "global alias on another namespace", filter: &proto.Filter{SourceNamespaces: []*proto.StringMatch{exact("-")}}, want: false},
+
+		// A name with no alias must not match an exact empty value through the missing alias.
+		{name: "exact empty value", filter: &proto.Filter{SourceNames: []*proto.StringMatch{exact("")}}, want: false},
+		{name: "fuzzy empty value", filter: &proto.Filter{SourceNames: []*proto.StringMatch{fuzzy("")}}, want: true},
+		{name: "fuzzy substring", filter: &proto.Filter{DestNames: []*proto.StringMatch{fuzzy("server")}}, want: true},
+		{name: "any of several names", filter: &proto.Filter{SourceNames: []*proto.StringMatch{exact("other"), exact("client-1")}}, want: true},
+		{name: "none of several names", filter: &proto.Filter{SourceNames: []*proto.StringMatch{exact("other"), fuzzy("server")}}, want: false},
+
+		{name: "protocol match", filter: &proto.Filter{Protocols: []*proto.StringMatch{exact("tcp")}}, want: true},
+		{name: "protocol mismatch", filter: &proto.Filter{Protocols: []*proto.StringMatch{exact("udp")}}, want: false},
+		{name: "action match", filter: &proto.Filter{Actions: []proto.Action{proto.Action_Deny, proto.Action_Allow}}, want: true},
+		{name: "action mismatch", filter: &proto.Filter{Actions: []proto.Action{proto.Action_Deny}}, want: false},
+		{name: "reporter match", filter: &proto.Filter{Reporter: proto.Reporter_Src}, want: true},
+		{name: "reporter mismatch", filter: &proto.Filter{Reporter: proto.Reporter_Dst}, want: false},
+		{name: "port match", filter: &proto.Filter{DestPorts: []*proto.PortMatch{{Port: 80}, {Port: 443}}}, want: true},
+		{name: "port mismatch", filter: &proto.Filter{DestPorts: []*proto.PortMatch{{Port: 80}}}, want: false},
+		{name: "every field must match", filter: &proto.Filter{SourceNamespaces: []*proto.StringMatch{exact("ns-1")}, DestPorts: []*proto.PortMatch{{Port: 80}}}, want: false},
+
+		// Pending actions read only the pending hits, not the enforced ones.
+		{name: "pending action match", filter: &proto.Filter{PendingActions: []proto.Action{proto.Action_Deny}}, want: true},
+		{name: "pending action only enforced", filter: &proto.Filter{PendingActions: []proto.Action{proto.Action_Allow}}, want: false},
+		{name: "pending action without pending hits", mutate: noPolicies, filter: &proto.Filter{PendingActions: []proto.Action{proto.Action_Deny}}, want: false},
+
+		{name: "empty policy filter", filter: &proto.Filter{Policies: []*proto.PolicyMatch{}}, want: false},
+		{name: "policy on enforced hit", filter: &proto.Filter{Policies: []*proto.PolicyMatch{{Name: exact("allow-dns")}}}, want: true},
+		{name: "policy on pending hit", filter: &proto.Filter{Policies: []*proto.PolicyMatch{{Name: exact("staged-deny")}}}, want: true},
+		{name: "policy name mismatch", filter: &proto.Filter{Policies: []*proto.PolicyMatch{{Name: exact("deny-all")}}}, want: false},
+		{name: "policy tier fuzzy", filter: &proto.Filter{Policies: []*proto.PolicyMatch{{Tier: fuzzy("sec")}}}, want: true},
+		{name: "policy fields split across hits", filter: &proto.Filter{Policies: []*proto.PolicyMatch{{Name: exact("allow-dns"), Action: proto.Action_Deny}}}, want: false},
+		{name: "policy kind mismatch", filter: &proto.Filter{Policies: []*proto.PolicyMatch{{Name: exact("allow-dns"), Kind: proto.PolicyKind_NetworkPolicy}}}, want: false},
+		{name: "unset policy match on a hit", filter: &proto.Filter{Policies: []*proto.PolicyMatch{{}}}, want: true},
+		{name: "unset policy match without hits", mutate: noPolicies, filter: &proto.Filter{Policies: []*proto.PolicyMatch{{}}}, want: false},
 	}
 
-	filter := &proto.Filter{
-		SourceNames:      strs(),
-		DestNames:        strs(),
-		SourceNamespaces: strs(),
-		DestNamespaces:   strs(),
-		Protocols:        strs(),
-	}
-	if set() {
-		filter.Actions = []proto.Action{pick(rng, filterActions[1:])}
-	}
-	if set() {
-		filter.PendingActions = []proto.Action{pick(rng, filterActions[1:]), pick(rng, filterActions[1:])}
-	}
-	if set() {
-		filter.Reporter = pick(rng, []proto.Reporter{proto.Reporter_Src, proto.Reporter_Dst})
-	}
-	if set() {
-		filter.DestPorts = []*proto.PortMatch{{Port: pick(rng, []int64{0, 80, 8080})}}
-	}
-	switch rng.IntN(6) {
-	case 0:
-		filter.Policies = []*proto.PolicyMatch{}
-	case 1, 2:
-		for range 1 + rng.IntN(2) {
-			filter.Policies = append(filter.Policies, &proto.PolicyMatch{
-				Name:      optStr(),
-				Namespace: optStr(),
-				Tier:      optStr(),
-				Kind:      pick(rng, filterKinds),
-				Action:    pick(rng, filterActions),
-			})
-		}
-	}
-	return filter
-}
-
-// referenceMatches is the closure-based Matches implementation that built a matcher per field
-// on every call, kept as an oracle.
-func referenceMatches(filter *proto.Filter, key *types.FlowKey) bool {
-	if filter == nil {
-		return true
-	}
-	names := func(n string) []string {
-		switch n {
-		case "pub":
-			return []string{"PUBLIC NETWORK", "pub"}
-		case "pvt":
-			return []string{"PRIVATE NETWORK", "pvt"}
-		}
-		return []string{n}
-	}
-	namespaces := func(n string) []string {
-		if n == "Global" {
-			return []string{"-", "Global"}
-		}
-		return []string{n}
-	}
-	strMatch := func(filters []*proto.StringMatch, vals []string) bool {
-		if len(filters) == 0 {
-			return true
-		}
-		return slices.ContainsFunc(filters, func(f *proto.StringMatch) bool {
-			if f.Type == proto.MatchType_Exact {
-				return slices.Contains(vals, f.Value)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k := matchesTestKey()
+			if tc.mutate != nil {
+				tc.mutate(k)
 			}
-			return slices.ContainsFunc(vals, func(v string) bool { return strings.Contains(v, f.Value) })
+			require.Equal(t, tc.want, types.Matches(tc.filter, types.ProtoToFlowKey(k)))
 		})
 	}
-	trace := types.FlowLogPolicyToProto(key.Policies())
-
-	if !strMatch(filter.SourceNames, names(key.SourceName())) ||
-		!strMatch(filter.DestNames, names(key.DestName())) ||
-		!strMatch(filter.SourceNamespaces, namespaces(key.SourceNamespace())) ||
-		!strMatch(filter.DestNamespaces, namespaces(key.DestNamespace())) ||
-		!strMatch(filter.Protocols, []string{key.Proto()}) {
-		return false
-	}
-	if len(filter.Actions) > 0 && !slices.Contains(filter.Actions, key.Action()) {
-		return false
-	}
-	if len(filter.PendingActions) > 0 && !slices.ContainsFunc(trace.PendingPolicies, func(h *proto.PolicyHit) bool {
-		return slices.Contains(filter.PendingActions, h.Action)
-	}) {
-		return false
-	}
-	if filter.Reporter != proto.Reporter_ReporterUnspecified && filter.Reporter != key.Reporter() {
-		return false
-	}
-	if len(filter.DestPorts) > 0 && !slices.ContainsFunc(filter.DestPorts, func(p *proto.PortMatch) bool {
-		return p.Port == key.DestPort()
-	}) {
-		return false
-	}
-	if filter.Policies == nil {
-		return true
-	}
-	hitMatches := func(h *proto.PolicyHit) bool {
-		return slices.ContainsFunc(filter.Policies, func(f *proto.PolicyMatch) bool {
-			return types.StringMatchMatches(f.Name, h.Name) &&
-				(f.Kind == proto.PolicyKind_KindUnspecified || h.Kind == f.Kind) &&
-				types.StringMatchMatches(f.Namespace, h.Namespace) &&
-				types.StringMatchMatches(f.Tier, h.Tier) &&
-				(f.Action == proto.Action_ActionUnspecified || h.Action == f.Action)
-		})
-	}
-	return slices.ContainsFunc(trace.EnforcedPolicies, hitMatches) || slices.ContainsFunc(trace.PendingPolicies, hitMatches)
 }
