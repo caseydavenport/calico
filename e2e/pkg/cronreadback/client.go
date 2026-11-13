@@ -35,13 +35,13 @@ const (
 	// DefaultNamespace is the namespace every cron lives in, whatever its repo.
 	DefaultNamespace = "argoci"
 
-	// RepoLabel is the label the runs of a cron carry with its repo's name, at
+	// repoLabel is the label the runs of a cron carry with its repo's name, at
 	// spec.workflowMetadata.labels of the CronWorkflow.
-	RepoLabel = "CI_GIT_REPO_NAME"
+	repoLabel = "CI_GIT_REPO_NAME"
 )
 
-// ErrNotFound is returned when the Argo server has no such CronWorkflow.
-var ErrNotFound = errors.New("cron workflow not found")
+// errNotFound is returned when the Argo server has no such CronWorkflow.
+var errNotFound = errors.New("cron workflow not found")
 
 // ErrUnauthorized is returned when the Argo server rejects the token.
 var ErrUnauthorized = errors.New("argo server rejected the token")
@@ -76,16 +76,16 @@ func NewClient(server, namespace, token string) *Client {
 // GetRaw returns the JSON of the named CronWorkflow.
 func (c *Client) GetRaw(ctx context.Context, name string) ([]byte, error) {
 	path := fmt.Sprintf("/api/v1/cron-workflows/%s/%s", url.PathEscape(c.namespace), url.PathEscape(name))
-	return c.get(ctx, path, nil)
+	return c.fetch(ctx, path)
 }
 
-// Get returns the named CronWorkflow, or ErrNotFound.
-func (c *Client) Get(ctx context.Context, name string) (LiveCron, error) {
+// getCron returns the named CronWorkflow, or errNotFound.
+func (c *Client) getCron(ctx context.Context, name string) (LiveCron, error) {
 	data, err := c.GetRaw(ctx, name)
 	if err != nil {
 		return LiveCron{}, err
 	}
-	live, err := ParseLive(data)
+	live, err := parseLive(data)
 	if err != nil {
 		return LiveCron{}, fmt.Errorf("%s: %w", name, err)
 	}
@@ -93,15 +93,15 @@ func (c *Client) Get(ctx context.Context, name string) (LiveCron, error) {
 	return live, nil
 }
 
-// ListNames returns the names of the namespace's CronWorkflows that belong to
-// repo on branch. It lists them all and filters here, because the repo is not
-// a label of the CronWorkflow object, so a server-side selector cannot find it.
-func (c *Client) ListNames(ctx context.Context, repo, branch string) ([]string, error) {
-	data, err := c.get(ctx, fmt.Sprintf("/api/v1/cron-workflows/%s", url.PathEscape(c.namespace)), nil)
+// listCronNames returns the names of the namespace's CronWorkflows that belong to
+// repo on branch. It lists them all and filters here, since a server-side
+// selector cannot match the repo.
+func (c *Client) listCronNames(ctx context.Context, repo, branch string) ([]string, error) {
+	data, err := c.fetch(ctx, fmt.Sprintf("/api/v1/cron-workflows/%s", url.PathEscape(c.namespace)))
 	if err != nil {
 		return nil, err
 	}
-	return ParseNames(data, repo, branch)
+	return parseNames(data, repo, branch)
 }
 
 // cronList is the part of an Argo CronWorkflow list response the check reads.
@@ -109,19 +109,19 @@ type cronList struct {
 	Items []cronObject `json:"items"`
 }
 
-// ParseNames returns the names of the CronWorkflows in an Argo list response
+// parseNames returns the names of the CronWorkflows in an Argo list response
 // that belong to repo on branch. A CronWorkflow belongs to a repo when the runs
-// it spawns carry the repo's name in the RepoLabel label. It is on a branch
+// it spawns carry the repo's name in the repoLabel label. It is on a branch
 // when its source-file annotation names that branch's cron directory, or, for
 // one without the annotation, when its name ends with the branch.
-func ParseNames(data []byte, repo, branch string) ([]string, error) {
+func parseNames(data []byte, repo, branch string) ([]string, error) {
 	var list cronList
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, fmt.Errorf("decoding CronWorkflow list: %w", err)
 	}
 	var names []string
 	for _, item := range list.Items {
-		if item.Spec.WorkflowMetadata.Labels[RepoLabel] == repo && item.onBranch(branch) {
+		if item.Spec.WorkflowMetadata.Labels[repoLabel] == repo && item.onBranch(branch) {
 			names = append(names, item.Metadata.Name)
 		}
 	}
@@ -130,19 +130,15 @@ func ParseNames(data []byte, repo, branch string) ([]string, error) {
 
 // onBranch reports whether the cron was applied from branch.
 func (o cronObject) onBranch(branch string) bool {
-	if source := o.Metadata.Annotations[SourceURLAnnotation]; source != "" {
+	if source := o.Metadata.Annotations[sourceURLAnnotation]; source != "" {
 		return strings.Contains(source, "/blob/"+branch+"/"+cronDir+"/")
 	}
 	return strings.HasSuffix(o.Metadata.Name, "-"+sanitizeBranch(branch))
 }
 
-// get issues one authenticated GET and maps the statuses a caller acts on.
-func (c *Client) get(ctx context.Context, path string, query url.Values) ([]byte, error) {
-	u := c.server + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+// fetch issues one authenticated GET and maps the statuses a caller acts on.
+func (c *Client) fetch(ctx context.Context, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.server+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +162,7 @@ func (c *Client) get(ctx context.Context, path string, query url.Values) ([]byte
 	case http.StatusOK:
 		return body, nil
 	case http.StatusNotFound:
-		return nil, ErrNotFound
+		return nil, errNotFound
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return nil, fmt.Errorf("%w (HTTP %d): %s", ErrUnauthorized, resp.StatusCode, strings.TrimSpace(string(body)))
 	default:
@@ -179,8 +175,8 @@ func (c *Client) get(ctx context.Context, path string, query url.Values) ([]byte
 func ReadLive(ctx context.Context, c *Client, expected []ExpectedCron, repo, branch string) (LiveSet, error) {
 	live := LiveSet{Crons: map[string]LiveCron{}}
 	for _, want := range expected {
-		cron, err := c.Get(ctx, want.Name)
-		if errors.Is(err, ErrNotFound) {
+		cron, err := c.getCron(ctx, want.Name)
+		if errors.Is(err, errNotFound) {
 			continue
 		}
 		if err != nil {
@@ -189,7 +185,7 @@ func ReadLive(ctx context.Context, c *Client, expected []ExpectedCron, repo, bra
 		live.Crons[want.Name] = cron
 	}
 
-	names, err := c.ListNames(ctx, repo, branch)
+	names, err := c.listCronNames(ctx, repo, branch)
 	if err != nil {
 		return LiveSet{}, err
 	}

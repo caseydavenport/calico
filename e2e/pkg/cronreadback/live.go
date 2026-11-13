@@ -24,9 +24,9 @@ import (
 const (
 	envConfig = "E2E_TEST_CONFIG"
 
-	// SourceURLAnnotation is the annotation the ArgoCI cron expansion puts on a
+	// sourceURLAnnotation is the annotation the ArgoCI cron expansion puts on a
 	// CronWorkflow, holding the blob URL of the cron file it came from.
-	SourceURLAnnotation = "argoci-viewer/source-url"
+	sourceURLAnnotation = "argoci-viewer/source-url"
 
 	prologueBegin = "# BEGIN argoci:prologue\n"
 	prologueEnd   = "# END argoci:prologue"
@@ -43,15 +43,14 @@ type LiveCron struct {
 	Cells map[string]string
 }
 
-// NameValue is one entry of an env or parameter list.
-type NameValue struct {
+// nameValue is one entry of an env or parameter list.
+type nameValue struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 }
 
 // cronObject is the part of a CronWorkflow the check reads, as the ArgoCI cron
-// expansion lays it out. The object carries no labels of its own: the repo is
-// a label on the runs it spawns, under spec.workflowMetadata.
+// expansion lays it out.
 type cronObject struct {
 	Metadata cronMetadata `json:"metadata"`
 	Spec     cronSpec     `json:"spec"`
@@ -90,7 +89,7 @@ type templateSpec struct {
 
 // scriptSpec is a script or container block. Only a script has source.
 type scriptSpec struct {
-	Env    []NameValue `json:"env"`
+	Env    []nameValue `json:"env"`
 	Source string      `json:"source"`
 }
 
@@ -105,27 +104,29 @@ type dagTask struct {
 }
 
 type taskArguments struct {
-	Parameters []NameValue `json:"parameters"`
+	Parameters []nameValue `json:"parameters"`
 }
 
 // prologueDefault matches a `export E2E_TEST_CONFIG="${E2E_TEST_CONFIG:-value}"`
 // line, which is how a file's globalPrologue sets the default config.
 var prologueDefault = regexp.MustCompile(`(?m)^\s*export\s+E2E_TEST_CONFIG="?\$\{E2E_TEST_CONFIG:-(.*?)\}"?\s*$`)
 
-// ParseLive reduces the JSON of one CronWorkflow to its cells. Each task of
+// parseLive reduces the JSON of one CronWorkflow to its cells. Each task of
 // the entrypoint DAG is a cell, named after the task. Its config is, in order,
 // the template's E2E_TEST_CONFIG env (filled from the task's arguments when a
 // matrix shares the template), the workflow's template defaults, then the
 // default the globalPrologue exports in the template's script. A task with none
 // of these is no cell. A CronWorkflow with no entrypoint DAG is an error.
-func ParseLive(data []byte) (LiveCron, error) {
-	obj, err := decodeCron(data)
-	if err != nil {
-		return LiveCron{}, err
+func parseLive(data []byte) (LiveCron, error) {
+	var obj cronObject
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return LiveCron{}, fmt.Errorf("decoding CronWorkflow: %w", err)
 	}
 	live := LiveCron{Name: obj.Metadata.Name, Cells: map[string]string{}}
 
 	spec := obj.Spec.WorkflowSpec
+
+	// Tasks name their template, so index the templates first.
 	byName := map[string]templateSpec{}
 	for _, t := range spec.Templates {
 		byName[t.Name] = t
@@ -144,15 +145,6 @@ func ParseLive(data []byte) (LiveCron, error) {
 		}
 	}
 	return live, nil
-}
-
-// decodeCron unmarshals one CronWorkflow.
-func decodeCron(data []byte) (cronObject, error) {
-	var obj cronObject
-	if err := json.Unmarshal(data, &obj); err != nil {
-		return cronObject{}, fmt.Errorf("decoding CronWorkflow: %w", err)
-	}
-	return obj, nil
 }
 
 // taskConfig returns the E2E_TEST_CONFIG a task's pod runs with.
@@ -176,7 +168,7 @@ func taskConfig(task dagTask, tmpl templateSpec, defaults scriptSpec) (string, b
 
 // resolveInput fills a value that a matrix template takes from its task's
 // arguments, as in {{inputs.parameters.E2E_TEST_CONFIG}}.
-func resolveInput(value string, args []NameValue) (string, bool) {
+func resolveInput(value string, args []nameValue) (string, bool) {
 	if !strings.HasPrefix(value, inputPrefix) || !strings.HasSuffix(value, "}}") {
 		return value, true
 	}
@@ -185,7 +177,7 @@ func resolveInput(value string, args []NameValue) (string, bool) {
 }
 
 // envValue returns the value of the named entry.
-func envValue(list []NameValue, name string) (string, bool) {
+func envValue(list []nameValue, name string) (string, bool) {
 	for _, nv := range list {
 		if nv.Name == name {
 			return nv.Value, true

@@ -65,6 +65,8 @@ func LoadExpected(repoRoot, branch string) ([]ExpectedCron, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Group the lanes by the cron file each came from.
 	bySource := map[string][]cilanes.Lane{}
 	for _, l := range lanes {
 		bySource[l.Source] = append(bySource[l.Source], l)
@@ -74,6 +76,8 @@ func LoadExpected(repoRoot, branch string) ([]ExpectedCron, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// A file's live name comes from its own generateName, which cilanes does not carry.
 	var crons []ExpectedCron
 	for _, e := range entries {
 		ext := filepath.Ext(e.Name())
@@ -110,14 +114,14 @@ func expectedCells(lanes []cilanes.Lane) map[string]string {
 		if l.Config == "" || strings.HasSuffix(l.Name, preMigrationSuffix) {
 			continue
 		}
-		cells[CellKey(l.Name)] = l.Config
+		cells[cellKey(l.Name)] = l.Config
 	}
 	return cells
 }
 
-// CellKey converts a cilanes lane name, "step [entry]", to the name Argo gives
+// cellKey converts a cilanes lane name, "step [entry]", to the name Argo gives
 // the expanded step, "step-entry", in the form both sides are matched on.
-func CellKey(laneName string) string {
+func cellKey(laneName string) string {
 	if i := strings.LastIndex(laneName, " ["); i >= 0 && strings.HasSuffix(laneName, "]") {
 		laneName = laneName[:i] + "-" + strings.TrimSuffix(laneName[i+2:], "]")
 	}

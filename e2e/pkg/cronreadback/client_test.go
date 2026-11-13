@@ -83,7 +83,7 @@ func TestClientGet(t *testing.T) {
 	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	live, err := NewClient(srv.URL, "argoci", "abc").Get(context.Background(), "e2e-bpf-master")
+	live, err := NewClient(srv.URL, "argoci", "abc").getCron(context.Background(), "e2e-bpf-master")
 
 	Expect(err).NotTo(HaveOccurred())
 	Expect(live.Cells).To(HaveKey("wireguard"))
@@ -98,7 +98,7 @@ func TestClientKeepsAuthorizationHeaderValue(t *testing.T) {
 	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	_, err := NewClient(srv.URL, "argoci", "Bearer already").Get(context.Background(), "e2e-bpf-master")
+	_, err := NewClient(srv.URL, "argoci", "Bearer already").getCron(context.Background(), "e2e-bpf-master")
 
 	Expect(err).NotTo(HaveOccurred())
 	Expect(stub.auth).To(Equal("Bearer already"))
@@ -109,9 +109,9 @@ func TestClientMissingCron(t *testing.T) {
 	srv := httptest.NewServer(&argoStub{})
 	defer srv.Close()
 
-	_, err := NewClient(srv.URL, "argoci", "abc").Get(context.Background(), "nope")
+	_, err := NewClient(srv.URL, "argoci", "abc").getCron(context.Background(), "nope")
 
-	Expect(err).To(MatchError(ErrNotFound))
+	Expect(err).To(MatchError(errNotFound))
 }
 
 func TestClientRejectedToken(t *testing.T) {
@@ -119,10 +119,10 @@ func TestClientRejectedToken(t *testing.T) {
 	srv := httptest.NewServer(&argoStub{})
 	defer srv.Close()
 
-	_, err := NewClient(srv.URL, "argoci", "abc").Get(context.Background(), "expired")
+	_, err := NewClient(srv.URL, "argoci", "abc").getCron(context.Background(), "expired")
 
 	Expect(err).To(MatchError(ErrUnauthorized))
-	Expect(err).NotTo(MatchError(ErrNotFound))
+	Expect(err).NotTo(MatchError(errNotFound))
 }
 
 func TestReadLive(t *testing.T) {
@@ -148,21 +148,21 @@ func TestReadLive(t *testing.T) {
 	Expect(stub.paths).NotTo(ContainElement(ContainSubstring("labelSelector")))
 }
 
-func TestListNamesOtherRepoAndBranch(t *testing.T) {
+func TestListCronNamesOtherRepoAndBranch(t *testing.T) {
 	RegisterTestingT(t)
 	srv := httptest.NewServer(&argoStub{})
 	defer srv.Close()
 	client := NewClient(srv.URL, "argoci", "abc")
 
-	private, err := client.ListNames(context.Background(), "calico-private", "master")
+	private, err := client.listCronNames(context.Background(), "calico-private", "master")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(private).To(ConsistOf("e2e-private-master"))
 
-	release, err := client.ListNames(context.Background(), "calico", "release-v3.33")
+	release, err := client.listCronNames(context.Background(), "calico", "release-v3.33")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(release).To(ConsistOf("e2e-bpf-release-v3-33", "legacy-release-v3-33"))
 
-	none, err := client.ListNames(context.Background(), "other", "master")
+	none, err := client.listCronNames(context.Background(), "other", "master")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(none).To(BeEmpty())
 }

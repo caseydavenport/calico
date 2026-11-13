@@ -57,7 +57,7 @@ func main() {
 	os.Exit(run(client, *repoRoot, *branch, *repo))
 }
 
-// runDump prints one live cron's raw JSON, so the shape ParseLive reads can be
+// runDump prints one live cron's raw JSON, so the shape the check parses can be
 // checked against the real thing.
 func runDump(client *cronreadback.Client, name string) int {
 	data, err := client.GetRaw(context.Background(), name)

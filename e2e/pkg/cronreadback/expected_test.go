@@ -147,8 +147,8 @@ func TestLiveNameKeepsABaseThatEndsWithTheBranch(t *testing.T) {
 func TestCellKey(t *testing.T) {
 	RegisterTestingT(t)
 
-	Expect(CellKey("bpf-run-matrix-aws-encap [true]")).To(Equal("bpf-run-matrix-aws-encap-true"))
-	Expect(CellKey("arm64 [stable-1-azure-]")).To(Equal("arm64-stable-1-azure-"))
-	Expect(CellKey("wireguard")).To(Equal("wireguard"))
-	Expect(CellKey("Step [Rhel8.2]")).To(Equal("step-rhel8-2"))
+	Expect(cellKey("bpf-run-matrix-aws-encap [true]")).To(Equal("bpf-run-matrix-aws-encap-true"))
+	Expect(cellKey("arm64 [stable-1-azure-]")).To(Equal("arm64-stable-1-azure-"))
+	Expect(cellKey("wireguard")).To(Equal("wireguard"))
+	Expect(cellKey("Step [Rhel8.2]")).To(Equal("step-rhel8-2"))
 }

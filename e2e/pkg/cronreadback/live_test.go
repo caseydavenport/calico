@@ -131,7 +131,7 @@ const hoistedFixture = `{
 func TestParseLive(t *testing.T) {
 	RegisterTestingT(t)
 
-	live, err := ParseLive([]byte(liveFixture))
+	live, err := parseLive([]byte(liveFixture))
 	Expect(err).NotTo(HaveOccurred())
 	Expect(live.Name).To(Equal("e2e-bpf-master"))
 
@@ -150,7 +150,7 @@ func TestParseLive(t *testing.T) {
 func TestParseLiveSkipsCellsWithoutConfig(t *testing.T) {
 	RegisterTestingT(t)
 
-	live, err := ParseLive([]byte(liveFixture))
+	live, err := parseLive([]byte(liveFixture))
 	Expect(err).NotTo(HaveOccurred())
 
 	// A default exported in the main script is not the prologue's.
@@ -167,7 +167,7 @@ func TestParseLiveSkipsCellsWithoutConfig(t *testing.T) {
 func TestParseLiveTemplateDefaults(t *testing.T) {
 	RegisterTestingT(t)
 
-	live, err := ParseLive([]byte(hoistedFixture))
+	live, err := parseLive([]byte(hoistedFixture))
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(live.Cells).To(Equal(map[string]string{
@@ -181,7 +181,7 @@ func TestParseLiveTemplateDefaultsOtherVariable(t *testing.T) {
 
 	other := strings.Replace(hoistedFixture, `"E2E_TEST_CONFIG"`, `"E2E_TEST_CONFIG_OLD"`, 1)
 
-	live, err := ParseLive([]byte(other))
+	live, err := parseLive([]byte(other))
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(live.Cells).To(BeEmpty())
@@ -193,7 +193,7 @@ func TestParseLiveTaskWithoutTheArgument(t *testing.T) {
 	// The shared template reads its config from an argument this task omits.
 	renamed := strings.Replace(liveFixture, `{"name": "E2E_TEST_CONFIG", "value": "e2e/config/bpf/aks-bpf-encap.yaml"}`, `{"name": "OTHER", "value": "x"}`, 1)
 
-	live, err := ParseLive([]byte(renamed))
+	live, err := parseLive([]byte(renamed))
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(live.Cells).NotTo(HaveKey("arm64-smoke-tests-aks-arm64-stable-1-none-"))
@@ -205,7 +205,7 @@ func TestParseLiveRequiresEntrypointDAG(t *testing.T) {
 
 	renamed := strings.Replace(liveFixture, `"entrypoint": "argoci-condensed-entrypoint"`, `"entrypoint": "main"`, 1)
 
-	_, err := ParseLive([]byte(renamed))
+	_, err := parseLive([]byte(renamed))
 
 	Expect(err).To(MatchError(ContainSubstring("no entrypoint DAG")))
 }
@@ -213,6 +213,6 @@ func TestParseLiveRequiresEntrypointDAG(t *testing.T) {
 func TestParseLiveRejectsBadJSON(t *testing.T) {
 	RegisterTestingT(t)
 
-	_, err := ParseLive([]byte("not json"))
+	_, err := parseLive([]byte("not json"))
 	Expect(err).To(HaveOccurred())
 }
