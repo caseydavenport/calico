@@ -66,7 +66,6 @@ func LoadExpected(repoRoot, branch string) ([]ExpectedCron, error) {
 		return nil, err
 	}
 
-	// Group the lanes by the cron file each came from.
 	bySource := map[string][]cilanes.Lane{}
 	for _, l := range lanes {
 		bySource[l.Source] = append(bySource[l.Source], l)
