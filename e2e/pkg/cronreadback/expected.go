@@ -93,7 +93,7 @@ func LoadExpected(repoRoot, branch string) ([]ExpectedCron, error) {
 			return nil, fmt.Errorf("%s: no generateName, so no live cron name", rel)
 		}
 		crons = append(crons, ExpectedCron{
-			Name:  strings.TrimSuffix(header.GenerateName, "-") + "-" + sanitizeBranch(branch),
+			Name:  liveName(header.GenerateName, branch),
 			File:  rel,
 			Cells: expectedCells(bySource[rel]),
 		})
@@ -132,8 +132,20 @@ func normalizeName(s string) string {
 	return nonNameChars.ReplaceAllString(strings.ToLower(s), "-")
 }
 
+// liveName returns the CronWorkflow name a file's generateName deploys as on
+// branch. A base that already ends with the branch is not suffixed twice.
+func liveName(generateName, branch string) string {
+	base := strings.TrimSuffix(generateName, "-")
+	suffix := sanitizeBranch(branch)
+	if strings.HasSuffix(base, "-"+suffix) {
+		return base
+	}
+	return base + "-" + suffix
+}
+
 // sanitizeBranch turns a branch name into the suffix the live cron name
-// carries, as in release-v3.33 to release-v3-33.
+// carries, as in release-v3.33 to release-v3-33. Unlike a step name it has no
+// leading or trailing dash.
 func sanitizeBranch(branch string) string {
-	return normalizeName(branch)
+	return strings.Trim(normalizeName(branch), "-")
 }

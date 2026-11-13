@@ -125,6 +125,25 @@ func TestLoadExpectedRequiresGenerateName(t *testing.T) {
 	Expect(err).To(MatchError(ContainSubstring("generateName")))
 }
 
+func TestLiveName(t *testing.T) {
+	RegisterTestingT(t)
+
+	Expect(liveName("e2e-bpf-", "master")).To(Equal("e2e-bpf-master"))
+	Expect(liveName("e2e-bpf-", "release-v3.33")).To(Equal("e2e-bpf-release-v3-33"))
+	Expect(liveName("e2e-bpf-", "Feature/Foo_bar")).To(Equal("e2e-bpf-feature-foo-bar"))
+	Expect(liveName("e2e-bpf-", "-odd-")).To(Equal("e2e-bpf-odd"))
+}
+
+func TestLiveNameKeepsABaseThatEndsWithTheBranch(t *testing.T) {
+	RegisterTestingT(t)
+
+	Expect(liveName("e2e-bpf-master-", "master")).To(Equal("e2e-bpf-master"))
+
+	// Only a whole trailing branch token counts.
+	Expect(liveName("e2e-bpf-foo-master-", "release-v3.33")).To(Equal("e2e-bpf-foo-master-release-v3-33"))
+	Expect(liveName("e2e-bpfmaster-", "master")).To(Equal("e2e-bpfmaster-master"))
+}
+
 func TestCellKey(t *testing.T) {
 	RegisterTestingT(t)
 

@@ -35,7 +35,8 @@ const (
 	// DefaultNamespace is the namespace every cron lives in, whatever its repo.
 	DefaultNamespace = "argoci"
 
-	// RepoLabel is the label ArgoCI stamps on a cron with its repo's name.
+	// RepoLabel is the label the runs of a cron carry with its repo's name, at
+	// spec.workflowMetadata.labels of the CronWorkflow.
 	RepoLabel = "CI_GIT_REPO_NAME"
 )
 
@@ -92,43 +93,47 @@ func (c *Client) Get(ctx context.Context, name string) (LiveCron, error) {
 	return live, nil
 }
 
-// ListNames returns the names of the CronWorkflows that carry repo's name in
-// their repo label.
-func (c *Client) ListNames(ctx context.Context, repo string) ([]string, error) {
-	query := url.Values{"listOptions.labelSelector": {RepoLabel + "=" + repo}}
-	data, err := c.get(ctx, fmt.Sprintf("/api/v1/cron-workflows/%s", url.PathEscape(c.namespace)), query)
+// ListNames returns the names of the namespace's CronWorkflows that belong to
+// repo on branch. It lists them all and filters here, because the repo is not
+// a label of the CronWorkflow object, so a server-side selector cannot find it.
+func (c *Client) ListNames(ctx context.Context, repo, branch string) ([]string, error) {
+	data, err := c.get(ctx, fmt.Sprintf("/api/v1/cron-workflows/%s", url.PathEscape(c.namespace)), nil)
 	if err != nil {
 		return nil, err
 	}
-	return ParseNames(data)
+	return ParseNames(data, repo, branch)
 }
 
-// CronList is the part of an Argo CronWorkflow list response the check reads.
-type CronList struct {
-	Items []ListedCron `json:"items"`
+// cronList is the part of an Argo CronWorkflow list response the check reads.
+type cronList struct {
+	Items []cronObject `json:"items"`
 }
 
-// ListedCron is the metadata of one listed CronWorkflow.
-type ListedCron struct {
-	Metadata ListedCronMeta `json:"metadata"`
-}
-
-// ListedCronMeta is the name of one listed CronWorkflow.
-type ListedCronMeta struct {
-	Name string `json:"name"`
-}
-
-// ParseNames returns the names in an Argo CronWorkflow list response.
-func ParseNames(data []byte) ([]string, error) {
-	var list CronList
+// ParseNames returns the names of the CronWorkflows in an Argo list response
+// that belong to repo on branch. A CronWorkflow belongs to a repo when the runs
+// it spawns carry the repo's name in the RepoLabel label. It is on a branch
+// when its source-file annotation names that branch's cron directory, or, for
+// one without the annotation, when its name ends with the branch.
+func ParseNames(data []byte, repo, branch string) ([]string, error) {
+	var list cronList
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, fmt.Errorf("decoding CronWorkflow list: %w", err)
 	}
-	names := make([]string, 0, len(list.Items))
+	var names []string
 	for _, item := range list.Items {
-		names = append(names, item.Metadata.Name)
+		if item.Spec.WorkflowMetadata.Labels[RepoLabel] == repo && item.onBranch(branch) {
+			names = append(names, item.Metadata.Name)
+		}
 	}
 	return names, nil
+}
+
+// onBranch reports whether the cron was applied from branch.
+func (o cronObject) onBranch(branch string) bool {
+	if source := o.Metadata.Annotations[SourceURLAnnotation]; source != "" {
+		return strings.Contains(source, "/blob/"+branch+"/"+cronDir+"/")
+	}
+	return strings.HasSuffix(o.Metadata.Name, "-"+sanitizeBranch(branch))
 }
 
 // get issues one authenticated GET and maps the statuses a caller acts on.
@@ -184,15 +189,10 @@ func ReadLive(ctx context.Context, c *Client, expected []ExpectedCron, repo, bra
 		live.Crons[want.Name] = cron
 	}
 
-	names, err := c.ListNames(ctx, repo)
+	names, err := c.ListNames(ctx, repo, branch)
 	if err != nil {
 		return LiveSet{}, err
 	}
-	suffix := "-" + sanitizeBranch(branch)
-	for _, name := range names {
-		if strings.HasSuffix(name, suffix) {
-			live.Names = append(live.Names, name)
-		}
-	}
+	live.Names = names
 	return live, nil
 }

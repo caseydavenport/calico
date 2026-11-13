@@ -36,7 +36,7 @@ const (
 func main() {
 	repoRoot := flag.String("repo-root", ".", "path to the repository root")
 	branch := flag.String("branch", "master", "branch whose crons to check; the live names carry it as a suffix")
-	repo := flag.String("repo", "calico", "repo name ArgoCI labels the repo's crons with")
+	repo := flag.String("repo", "calico", "repo name, without the owner, that ArgoCI labels the repo's cron runs with")
 	server := flag.String("server", os.Getenv("ARGO_SERVER"), "Argo server; defaults to ARGO_SERVER, then the public ArgoCI")
 	namespace := flag.String("namespace", envOr("ARGO_NAMESPACE", cronreadback.DefaultNamespace), "namespace the crons live in")
 	dump := flag.String("dump", "", "print the raw JSON of this one live cron and exit")
