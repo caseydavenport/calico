@@ -1,0 +1,139 @@
+// Copyright (c) 2026 Tigera, Inc. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package cronreadback reads the live ArgoCI CronWorkflows back and checks that
+// each cell's E2E_TEST_CONFIG matches the cron file that was merged.
+package cronreadback
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/projectcalico/calico/e2e/pkg/cilanes"
+)
+
+const (
+	cronDir = ".argoci/cron"
+
+	// The flannel migration lane's pre-migration run hardcodes its config in a
+	// script, so it is no cell of its own.
+	preMigrationSuffix = " [pre-migration]"
+)
+
+// ExpectedCron is one cron file and the cells it declares an E2E_TEST_CONFIG for.
+type ExpectedCron struct {
+	// Name is the live CronWorkflow name: the file's generateName base, then
+	// the branch.
+	Name string
+
+	// File is the repo-relative cron file.
+	File string
+
+	// Cells maps each cell's live name to its E2E_TEST_CONFIG.
+	Cells map[string]string
+}
+
+// cronHeader holds the one top-level field of a cron file that cilanes does not
+// resolve.
+type cronHeader struct {
+	GenerateName string `yaml:"generateName"`
+}
+
+// LoadExpected resolves every cron file under repoRoot to the live cron it
+// deploys as on branch. The cells come from cilanes, so a file's
+// globalPrologue default and its matrix entries resolve as they do for the
+// lane test sets.
+func LoadExpected(repoRoot, branch string) ([]ExpectedCron, error) {
+	lanes, err := cilanes.Load(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	bySource := map[string][]cilanes.Lane{}
+	for _, l := range lanes {
+		bySource[l.Source] = append(bySource[l.Source], l)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(repoRoot, cronDir))
+	if err != nil {
+		return nil, err
+	}
+	var crons []ExpectedCron
+	for _, e := range entries {
+		ext := filepath.Ext(e.Name())
+		if e.IsDir() || (ext != ".yaml" && ext != ".yml") {
+			continue
+		}
+		rel := filepath.Join(cronDir, e.Name())
+		data, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			return nil, err
+		}
+		var header cronHeader
+		if err := yaml.Unmarshal(data, &header); err != nil {
+			return nil, fmt.Errorf("%s: %w", rel, err)
+		}
+		if header.GenerateName == "" {
+			return nil, fmt.Errorf("%s: no generateName, so no live cron name", rel)
+		}
+		crons = append(crons, ExpectedCron{
+			Name:  strings.TrimSuffix(header.GenerateName, "-") + "-" + sanitizeBranch(branch),
+			File:  rel,
+			Cells: expectedCells(bySource[rel]),
+		})
+	}
+	sort.Slice(crons, func(i, j int) bool { return crons[i].Name < crons[j].Name })
+	return crons, nil
+}
+
+// expectedCells keys each lane that selects a config by the name its live cell
+// has, which is how the live side is looked up.
+func expectedCells(lanes []cilanes.Lane) map[string]string {
+	cells := map[string]string{}
+	for _, l := range lanes {
+		if l.Config == "" || strings.HasSuffix(l.Name, preMigrationSuffix) {
+			continue
+		}
+		cells[CellKey(l.Name)] = l.Config
+	}
+	return cells
+}
+
+// CellKey converts a cilanes lane name, "step [entry]", to the name Argo gives
+// the expanded step, "step-entry", in the form both sides are matched on.
+func CellKey(laneName string) string {
+	if i := strings.LastIndex(laneName, " ["); i >= 0 && strings.HasSuffix(laneName, "]") {
+		laneName = laneName[:i] + "-" + strings.TrimSuffix(laneName[i+2:], "]")
+	}
+	return normalizeName(laneName)
+}
+
+var nonNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// normalizeName folds a step name the way Kubernetes names fold, so a matrix
+// entry with a capital or a dot still meets its live step.
+func normalizeName(s string) string {
+	return nonNameChars.ReplaceAllString(strings.ToLower(s), "-")
+}
+
+// sanitizeBranch turns a branch name into the suffix the live cron name
+// carries, as in release-v3.33 to release-v3-33.
+func sanitizeBranch(branch string) string {
+	return normalizeName(branch)
+}
